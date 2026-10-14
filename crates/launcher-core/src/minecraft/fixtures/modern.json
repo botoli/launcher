@@ -1,0 +1,120 @@
+{
+  "id": "1.21-test",
+  "type": "release",
+  "mainClass": "net.minecraft.client.main.Main",
+  "assets": "test-assets",
+  "assetIndex": {
+    "id": "test-assets",
+    "sha1": "asset-index-sha1",
+    "size": 42,
+    "totalSize": 84,
+    "url": "https://example.invalid/assets.json"
+  },
+  "downloads": {
+    "client": {
+      "sha1": "client-sha1",
+      "size": 1024,
+      "url": "https://example.invalid/client.jar"
+    }
+  },
+  "javaVersion": {
+    "component": "java-runtime-delta",
+    "majorVersion": 21
+  },
+  "libraries": [
+    {
+      "name": "org.example:allowed:1.0",
+      "downloads": {
+        "artifact": {
+          "path": "org/example/allowed/1.0/allowed-1.0.jar",
+          "sha1": "allowed-sha1",
+          "size": 100,
+          "url": "https://example.invalid/allowed.jar"
+        }
+      }
+    },
+    {
+      "name": "org.example:blocked:1.0",
+      "rules": [
+        { "action": "allow" },
+        { "action": "disallow", "os": { "name": "windows" } }
+      ],
+      "downloads": {
+        "artifact": {
+          "path": "org/example/blocked/1.0/blocked-1.0.jar"
+        }
+      }
+    },
+    {
+      "name": "org.example:native:1.0",
+      "rules": [
+        { "action": "allow", "os": { "name": "windows" } }
+      ],
+      "natives": {
+        "windows": "natives-windows-${arch}"
+      },
+      "extract": {
+        "exclude": ["META-INF/"]
+      },
+      "downloads": {
+        "artifact": {
+          "path": "org/example/native/1.0/native-1.0.jar"
+        },
+        "classifiers": {
+          "natives-windows-32": {
+            "path": "org/example/native/1.0/native-1.0-natives-windows-32.jar"
+          },
+          "natives-windows-64": {
+            "path": "org/example/native/1.0/native-1.0-natives-windows-64.jar"
+          }
+        }
+      }
+    }
+  ],
+  "arguments": {
+    "jvm": [
+      "-Xmx2G",
+      {
+        "rules": [{ "action": "allow", "os": { "name": "windows" } }],
+        "value": [
+          "-Djava.library.path=${natives_directory}",
+          "-Dlauncher=${launcher_name}/${launcher_version}"
+        ]
+      },
+      "-cp",
+      "${classpath}"
+    ],
+    "game": [
+      "--username",
+      "${auth_player_name}",
+      {
+        "rules": [{ "action": "allow", "os": { "name": "windows" } }],
+        "value": [
+          "--version",
+          "${version_name}",
+          "--gameDir",
+          "${game_directory}"
+        ]
+      },
+      "--assetsDir",
+      "${assets_root}",
+      "--assetIndex",
+      "${assets_index_name}",
+      "--uuid",
+      "${auth_uuid}",
+      "--accessToken",
+      "${auth_access_token}",
+      "--userType",
+      "${user_type}",
+      "--versionType",
+      "${version_type}",
+      {
+        "rules": [{ "action": "allow", "features": { "has_custom_resolution": true } }],
+        "value": ["--width", "1920"]
+      }
+    ]
+  },
+  "unknownTopLevelField": {
+    "ignored": true
+  }
+}

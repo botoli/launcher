@@ -1,0 +1,14 @@
+{
+  "id": "1.7-test",
+  "type": "old_alpha",
+  "mainClass": "net.minecraft.client.Minecraft",
+  "assets": "legacy",
+  "downloads": {
+    "client": {
+      "url": "https://example.invalid/legacy-client.jar"
+    }
+  },
+  "libraries": [],
+  "minecraftArguments": "--username ${auth_player_name} --message \"value with spaces\"",
+  "ignoredLegacyField": "ignored"
+}

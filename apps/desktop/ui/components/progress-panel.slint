@@ -1,0 +1,82 @@
+import { AssetCatalog } from "../theme/assets.slint";
+import { Palette } from "../theme/palette.slint";
+
+export component ProgressPanel inherits Rectangle {
+    in property <string> status-text;
+    in property <string> detail-text;
+    in property <float> progress;
+    in property <int> progress-percent;
+    in property <bool> has-progress;
+
+    background: #061727f2;
+    border-width: 2px;
+    border-color: #31546a;
+    border-radius: 2px;
+
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 12px;
+
+        Image {
+            width: 46px;
+            height: 46px;
+            source: AssetCatalog.progress-icon;
+            image-fit: contain;
+        }
+
+        VerticalLayout {
+            width: 190px;
+            spacing: 0px;
+
+            Text {
+                text: root.status-text;
+                color: Palette.frost;
+                font-size: 14px;
+                font-weight: 700;
+                vertical-alignment: bottom;
+            }
+
+            Text {
+                text: root.detail-text;
+                color: Palette.muted;
+                font-size: 11px;
+                vertical-alignment: top;
+            }
+        }
+
+        progress-track := Rectangle {
+            horizontal-stretch: 1;
+            height: 22px;
+            border-width: 2px;
+            border-color: #29485b;
+            background: #020a12;
+
+            Rectangle {
+                x: 4px;
+                y: 4px;
+                width: root.has-progress ? (parent.width - 8px) * root.progress : 0px;
+                height: parent.height - 8px;
+                background: Palette.moss;
+            }
+
+            Rectangle {
+                x: 4px;
+                y: 4px;
+                width: root.has-progress ? (parent.width - 8px) * root.progress : 0px;
+                height: 3px;
+                background: Palette.leaf;
+            }
+        }
+
+        Text {
+            width: 72px;
+            text: root.has-progress ? root.progress-percent + "%" : "—";
+            color: Palette.frost;
+            font-family: "Consolas";
+            font-size: 20px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}

@@ -1,0 +1,137 @@
+import { AssetCatalog } from "../theme/assets.slint";
+import { Palette } from "../theme/palette.slint";
+
+export component TitleBar inherits Rectangle {
+    in-out property <string> nickname;
+    in property <string> nickname-error;
+
+    callback minimize-clicked();
+    callback close-clicked();
+    callback move-requested(float, float);
+
+    background: #061421ee;
+    border-width: 1px;
+    border-color: #29495a;
+
+    drag-area := TouchArea {
+        x: 374px;
+        width: parent.width - self.x - 110px;
+        height: parent.height;
+        mouse-cursor: self.pressed ? grabbing : grab;
+
+        moved => {
+            root.move-requested(
+                (self.mouse-x - self.pressed-x) / 1px,
+                (self.mouse-y - self.pressed-y) / 1px,
+            );
+        }
+    }
+
+    HorizontalLayout {
+        x: 12px;
+        y: 6px;
+        width: 350px;
+        height: parent.height - 6px;
+        spacing: 12px;
+        alignment: start;
+
+        Image {
+            width: 50px;
+            height: 50px;
+            source: AssetCatalog.avatar;
+            image-fit: contain;
+        }
+
+        user-area := Rectangle {
+            width: 288px;
+            height: 50px;
+            background: transparent;
+
+            Rectangle {
+                y: 2px;
+                width: 226px;
+                height: 28px;
+                background: #020a12dd;
+                border-width: 2px;
+                border-color: root.nickname-error == "" ? Palette.outline : #bd6048;
+                border-radius: 2px;
+
+                TextInput {
+                    x: 7px;
+                    y: 2px;
+                    width: parent.width - 14px;
+                    height: parent.height - 4px;
+                    text <=> root.nickname;
+                    color: Palette.frost;
+                    font-family: "Consolas";
+                    font-size: 15px;
+                    single-line: true;
+                }
+            }
+
+            Text {
+                y: 32px;
+                width: parent.width;
+                height: 16px;
+                text: root.nickname-error == "" ? "OFFLINE NICKNAME · 3–16" : root.nickname-error;
+                color: root.nickname-error == "" ? Palette.muted : #ef9d84;
+                font-family: "Consolas";
+                font-size: 10px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+
+    minimize-area := TouchArea {
+        x: parent.width - 108px;
+        width: 54px;
+        height: parent.height;
+        mouse-cursor: pointer;
+
+        clicked => {
+            root.minimize-clicked();
+        }
+    }
+
+    Rectangle {
+        x: minimize-area.x;
+        width: minimize-area.width;
+        height: parent.height;
+        background: minimize-area.pressed ? #244156 : minimize-area.has-hover ? #173248 : transparent;
+
+        Text {
+            text: "─";
+            color: Palette.frost;
+            font-size: 22px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    close-area := TouchArea {
+        x: parent.width - 54px;
+        width: 54px;
+        height: parent.height;
+        mouse-cursor: pointer;
+
+        clicked => {
+            root.close-clicked();
+        }
+    }
+
+    Rectangle {
+        x: close-area.x;
+        width: close-area.width;
+        height: parent.height;
+        background: close-area.pressed ? #713528 : close-area.has-hover ? #51291f : transparent;
+
+        Text {
+            text: "×";
+            color: #efb39b;
+            font-size: 28px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}

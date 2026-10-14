@@ -1,0 +1,90 @@
+import { Palette } from "../theme/palette.slint";
+
+export component PixelButton inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <image> surface-image;
+    in property <bool> show-icon: false;
+    in property <bool> show-surface: false;
+    in property <bool> primary: false;
+    in property <bool> asset-backed: false;
+    in property <bool> button-enabled: true;
+
+    callback clicked();
+
+    clip: true;
+    opacity: root.button-enabled ? 1 : 0.55;
+    border-width: root.asset-backed ? 0px : root.primary ? 3px : 2px;
+    border-color: root.primary ? Palette.bronze : Palette.outline;
+    border-radius: 2px;
+    background: root.asset-backed
+        ? (area.pressed ? #06111e66 : area.has-hover ? #ffffff1f : transparent)
+        : area.pressed
+            ? (root.primary ? #4d7d1d : #05101e)
+            : area.has-hover
+                ? (root.primary ? Palette.leaf : #0b2035)
+                : (root.primary ? Palette.moss : #071326);
+
+    if root.show-surface: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.surface-image;
+        image-fit: cover;
+        opacity: 0.16;
+    }
+
+    Rectangle {
+        visible: !root.asset-backed;
+        x: 4px;
+        y: 4px;
+        width: parent.width - 8px;
+        height: parent.height - 8px;
+        border-width: 1px;
+        border-color: root.primary ? #b9dc62 : #315873;
+        background: transparent;
+    }
+
+    HorizontalLayout {
+        y: area.pressed ? 2px : 0px;
+        width: parent.width;
+        height: parent.height;
+        padding-left: root.show-icon ? 18px : 24px;
+        padding-right: root.show-icon ? 18px : 24px;
+        spacing: 12px;
+        alignment: center;
+
+        if root.show-icon: Rectangle {
+            width: root.primary ? 42px : 38px;
+            height: parent.height;
+            background: transparent;
+
+            Image {
+                y: (parent.height - self.height) / 2 + 2px;
+                width: parent.width;
+                height: parent.width;
+                source: root.icon;
+                image-fit: contain;
+            }
+        }
+
+        Text {
+            text: root.label;
+            color: #fff9e9;
+            font-size: root.primary ? 29px : 18px;
+            font-weight: root.primary ? 600 : 500;
+            letter-spacing: root.primary ? 2px : 0px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    area := TouchArea {
+        mouse-cursor: root.button-enabled ? pointer : default;
+
+        clicked => {
+            if (root.button-enabled) {
+                root.clicked();
+            }
+        }
+    }
+}

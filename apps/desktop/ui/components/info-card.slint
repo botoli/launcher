@@ -1,0 +1,59 @@
+import { Palette } from "../theme/palette.slint";
+
+export component InfoCard inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <string> value;
+    in property <string> detail;
+    in property <bool> healthy: false;
+    in property <bool> asset-backed: false;
+
+    background: root.asset-backed ? transparent : #071524e8;
+    border-width: root.asset-backed ? 0px : 1px;
+    border-color: Palette.bronze;
+    border-radius: 2px;
+
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 12px;
+
+        Image {
+            width: 46px;
+            height: 46px;
+            source: root.icon;
+            image-fit: contain;
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+
+            Text {
+                text: root.label;
+                color: root.healthy ? Palette.leaf : Palette.muted;
+                font-size: 12px;
+                font-weight: 600;
+                vertical-alignment: bottom;
+            }
+
+            Text {
+                text: root.value;
+                color: Palette.frost;
+                font-family: "Consolas";
+                font-size: 17px;
+                font-weight: 700;
+                vertical-alignment: top;
+            }
+        }
+
+        Text {
+            visible: root.detail != "";
+            text: root.detail;
+            color: Palette.frost;
+            font-family: "Consolas";
+            font-size: 16px;
+            font-weight: 700;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+}

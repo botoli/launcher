@@ -1,0 +1,93 @@
+import { AssetCatalog } from "../theme/assets.slint";
+import { Palette } from "../theme/palette.slint";
+import { InfoCard } from "info-card.slint";
+import { PixelButton } from "pixel-button.slint";
+
+export component MainPanel inherits Rectangle {
+    in property <string> project-title;
+    in property <string> version;
+    in property <string> server-address;
+    in property <bool> server-online;
+    in property <int> ping-ms;
+    in property <bool> loading;
+    in property <bool> play-enabled: true;
+
+    callback play-clicked();
+
+    background: transparent;
+
+    Image {
+        source: AssetCatalog.main-panel;
+        width: parent.width;
+        height: parent.height;
+        image-fit: fill;
+    }
+
+    Image {
+        x: (parent.width - self.width) / 2;
+        y: -18px;
+        width: parent.width * 0.28;
+        height: self.width * 422 / 531;
+        source: AssetCatalog.project-emblem;
+        image-fit: contain;
+    }
+
+    Text {
+        x: parent.width * 0.15;
+        y: parent.height * 0.26;
+        width: 70%;
+        height: 15%;
+        text: root.project-title;
+        color: Palette.frost;
+        font-family: "Trebuchet MS";
+        font-size: 40px;
+        font-weight: 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    HorizontalLayout {
+        x: parent.width * 0.10;
+        y: parent.height * 0.5;
+        width: 80%;
+        height: 18%;
+        spacing: parent.width * 0.15;
+
+        InfoCard {
+            horizontal-stretch: 1;
+            icon: AssetCatalog.version-icon;
+            label: "Версия";
+            value: root.version;
+            detail: "";
+            asset-backed: true;
+        }
+
+        InfoCard {
+            horizontal-stretch: 1;
+            icon: AssetCatalog.server-icon;
+            label: root.server-online ? "Сервер онлайн" : "Сервер оффлайн";
+            value: root.server-address;
+            detail: root.server-online ? root.ping-ms + " ms" : "--";
+            healthy: root.server-online;
+            asset-backed: true;
+        }
+    }
+
+    PixelButton {
+        x: parent.width * 0.24;
+        y: parent.height * 0.73;
+        border-radius: 10px;
+        width: 52%;
+        height: 21%;
+        primary: true;
+        asset-backed: true;
+        button-enabled: root.play-enabled;
+        label: root.loading ? "Загрузка..." : "Играть";
+
+        clicked => {
+            if (!root.loading && root.play-enabled) {
+                root.play-clicked();
+            }
+        }
+    }
+}

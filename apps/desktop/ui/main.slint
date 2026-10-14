@@ -1,0 +1,163 @@
+import { AssetCatalog } from "theme/assets.slint";
+import { Palette } from "theme/palette.slint";
+import { TitleBar } from "components/title-bar.slint";
+import { MainPanel } from "components/main-panel.slint";
+import { PixelButton } from "components/pixel-button.slint";
+import { ProgressPanel } from "components/progress-panel.slint";
+
+export component AppWindow inherits Window {
+    in-out property <string> nickname-input;
+    in property <string> nickname-error;
+    in property <string> version;
+    in property <string> server-address;
+    in property <bool> server-online;
+    in property <int> ping-ms;
+    in property <string> launcher-status;
+    in property <string> launcher-detail;
+    in property <float> progress;
+    in property <int> progress-percent;
+    in property <bool> has-progress;
+    in property <bool> loading;
+    in property <bool> play-enabled;
+    in property <float> horseshoe-angle;
+
+    callback play-requested(string);
+    callback settings-requested();
+    callback mods-requested();
+    callback move-window(float, float);
+
+    title: "Equestrian Dream Launcher";
+    no-frame: true;
+    resize-border-width: 6px;
+    preferred-width: 1180px;
+    preferred-height: 750px;
+    min-width: 1180px;
+    min-height: 750px;
+    max-width: 1180px;
+    max-height: 750px;
+    background: Palette.ink;
+    default-font-family: "Segoe UI";
+    default-font-size: 15px;
+
+    Image {
+        source: AssetCatalog.background;
+        width: parent.width;
+        height: parent.height;
+        image-fit: cover;
+    }
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: #020a1266;
+    }
+
+    VerticalLayout {
+        spacing: 0px;
+
+        TitleBar {
+            height: 60px;
+            nickname <=> root.nickname-input;
+            nickname-error: root.nickname-error;
+
+            minimize-clicked => {
+                root.minimized = true;
+            }
+
+            close-clicked => {
+                root.close();
+            }
+
+            move-requested(delta-x, delta-y) => {
+                root.move-window(delta-x, delta-y);
+            }
+        }
+
+        workspace := Rectangle {
+            vertical-stretch: 1;
+            background: transparent;
+
+            panel := MainPanel {
+                width: parent.width * 0.70;
+                height: self.width * 957 / 1644;
+                x: (parent.width - self.width) / 2;
+                y: 12px;
+                project-title: "EquestrianDream";
+                version: root.version;
+                server-address: root.server-address;
+                server-online: root.server-online;
+                ping-ms: root.ping-ms;
+                loading: root.loading;
+                play-enabled: root.play-enabled;
+
+                play-clicked => {
+                    root.play-requested(root.nickname-input);
+                }
+            }
+
+            actions := HorizontalLayout {
+                x: (parent.width - self.width) / 2;
+                y: panel.y + panel.height + 12px;
+                width: panel.width * 1;
+                height: 58px;
+                spacing: 62px;
+
+                PixelButton {
+                    horizontal-stretch: 1;
+                    label: "Настройки";
+                    icon: AssetCatalog.settings-icon;
+                    show-icon: true;
+                    surface-image: AssetCatalog.settings-surface;
+                    show-surface: true;
+
+                    clicked => {
+                        root.settings-requested();
+                    }
+                }
+
+                PixelButton {
+                    horizontal-stretch: 1;
+                    label: "Моды";
+                    icon: AssetCatalog.mods-icon;
+                    show-icon: true;
+
+                    clicked => {
+                        root.mods-requested();
+                    }
+                }
+            }
+
+            Image {
+                x: (parent.width - self.width) / 2;
+                y: actions.y + 7px;
+                width: 44px;
+                height: 44px;
+                source: AssetCatalog.horseshoe-decoration;
+                image-fit: contain;
+                transform-rotation: root.horseshoe-angle * 1deg;
+                transform-origin: { x: self.width / 2, y: self.height / 2 };
+            }
+
+            progress-panel := ProgressPanel {
+                x: 28px;
+                y: parent.height - self.height - 10px;
+                width: parent.width - 56px;
+                height: 66px;
+                status-text: root.launcher-status;
+                detail-text: root.launcher-detail;
+                progress: root.progress;
+                progress-percent: root.progress-percent;
+                has-progress: root.has-progress;
+            }
+
+            Image {
+                x: 1054px;
+                y: progress-panel.y - self.height + 6px;
+                width: 78px;
+                height: self.width * 547 / 506;
+                source: AssetCatalog.cat-decoration;
+                image-fit: contain;
+            }
+        }
+    }
+}
