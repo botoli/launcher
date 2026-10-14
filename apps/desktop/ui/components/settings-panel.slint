@@ -1,0 +1,245 @@
+import { Palette } from "../theme/palette.slint";
+
+component SettingsButton inherits FocusScope {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> button-enabled: true;
+    callback clicked();
+    enabled: root.button-enabled;
+    opacity: root.button-enabled ? 1 : 0.5;
+    accessible-role: button;
+    accessible-label: root.label;
+
+    key-pressed(event) => {
+        if (event.text == Key.Return || event.text == " ") {
+            root.clicked();
+            return accept;
+        }
+        reject
+    }
+
+    Rectangle {
+        background: area.pressed ? #183521 : area.has-hover ? (root.primary ? #729c32 : #183044) : (root.primary ? #537f25 : #081a29);
+        border-width: 2px;
+        border-color: root.has-focus ? Palette.leaf : root.primary ? Palette.bronze : Palette.outline;
+        border-radius: 2px;
+        Text {
+            text: root.label;
+            color: Palette.frost;
+            font-size: 17px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    area := TouchArea {
+        enabled: root.button-enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component MemorySlider inherits FocusScope {
+    in property <int> value;
+    in property <int> minimum: 1024;
+    in property <int> maximum;
+    in property <bool> slider-enabled;
+    callback changed(float);
+    callback stepped(int);
+    enabled: root.slider-enabled;
+    accessible-role: slider;
+    accessible-label: "Память Minecraft";
+    accessible-value: root.value;
+    private property <float> fraction: root.maximum <= root.minimum ? 0 : clamp((root.value - root.minimum) / (root.maximum - root.minimum), 0, 1);
+    key-pressed(event) => {
+        if (event.text == Key.LeftArrow || event.text == Key.DownArrow) {
+            root.stepped(-1);
+            return accept;
+        }
+        if (event.text == Key.RightArrow || event.text == Key.UpArrow) {
+            root.stepped(1);
+            return accept;
+        }
+        if (event.text == Key.Home) { root.changed(root.minimum); return accept; }
+        if (event.text == Key.End) { root.changed(root.maximum); return accept; }
+        reject
+    }
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: 12px;
+        width: parent.width;
+        background: #030e18;
+        border-width: 1px;
+        border-color: Palette.outline;
+        Rectangle {
+            x: 1px;
+            y: 1px;
+            height: parent.height - 2px;
+            width: (parent.width - 2px) * root.fraction;
+            background: Palette.moss;
+        }
+    }
+    Rectangle {
+        x: (parent.width - self.width) * root.fraction;
+        y: (parent.height - self.height) / 2;
+        width: 22px;
+        height: 30px;
+        background: area.pressed ? Palette.leaf : #8fb64e;
+        border-width: 2px;
+        border-color: root.has-focus ? Palette.frost : Palette.bronze;
+        border-radius: 2px;
+    }
+    area := TouchArea {
+        enabled: root.slider-enabled;
+        mouse-cursor: ew-resize;
+        clicked => {
+            root.changed(root.minimum + clamp((self.mouse-x - 11px) / max(1px, self.width - 22px), 0, 1) * (root.maximum - root.minimum));
+        }
+        moved => {
+            if (self.pressed) {
+                root.changed(root.minimum + clamp((self.mouse-x - 11px) / max(1px, self.width - 22px), 0, 1) * (root.maximum - root.minimum));
+            }
+        }
+    }
+}
+
+export component SettingsPanel inherits Rectangle {
+    in-out property <string> memory-input;
+    in property <int> memory-value;
+    in property <int> memory-maximum;
+    in property <string> memory-gib;
+    in property <string> memory-error;
+    in property <string> memory-summary;
+    in property <string> memory-recommendation;
+    in property <string> memory-suggestion;
+    in property <bool> memory-detected;
+    in property <bool> memory-save-enabled;
+    in property <string> installation-path;
+    callback input-edited(string);
+    callback slider-changed(float);
+    callback stepped(int);
+    callback save-requested();
+    callback back-requested();
+    callback retry-requested();
+    callback suggestion-requested();
+
+    background: #081827f5;
+    border-width: 3px;
+    border-color: Palette.bronze;
+    border-radius: 3px;
+
+    FocusScope {
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if (event.text == Key.Escape) { root.back-requested(); return accept; }
+            reject
+        }
+        VerticalLayout {
+            padding: 30px;
+            spacing: 10px;
+            Text {
+                text: "Настройки";
+                color: Palette.frost;
+                font-size: 32px;
+                font-weight: 600;
+                height: 40px;
+            }
+            Rectangle { height: 1px; background: #765333; }
+            HorizontalLayout {
+                height: 38px;
+                Text {
+                    text: "Оперативная память";
+                    color: Palette.frost;
+                    font-size: 22px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.memory-gib + " ГБ";
+                    color: Palette.leaf;
+                    font-size: 27px;
+                    font-weight: 600;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+            HorizontalLayout {
+                height: 44px;
+                spacing: 18px;
+                MemorySlider {
+                    horizontal-stretch: 1;
+                    value: root.memory-value;
+                    maximum: root.memory-maximum;
+                    slider-enabled: root.memory-detected;
+                    changed(value) => { root.slider-changed(value); }
+                    stepped(direction) => { root.stepped(direction); }
+                }
+                Rectangle {
+                    width: 116px;
+                    background: #030e18;
+                    border-width: 2px;
+                    border-color: input.has-focus ? Palette.leaf : root.memory-error == "" ? Palette.outline : #bd6048;
+                    input := TextInput {
+                        x: 10px;
+                        y: 8px;
+                        width: parent.width - 20px;
+                        height: parent.height - 16px;
+                        text <=> root.memory-input;
+                        color: Palette.frost;
+                        font-size: 20px;
+                        single-line: true;
+                        enabled: root.memory-detected;
+                        accessible-label: "Объём памяти в МБ";
+                        edited => { root.input-edited(self.text); }
+                        key-pressed(event) => {
+                            if (event.text == Key.UpArrow) { root.stepped(1); return accept; }
+                            if (event.text == Key.DownArrow) { root.stepped(-1); return accept; }
+                            reject
+                        }
+                        accepted => { if (root.memory-save-enabled) { root.save-requested(); } }
+                    }
+                }
+                Text { text: "МБ"; width: 32px; color: Palette.muted; vertical-alignment: center; }
+            }
+            HorizontalLayout {
+                height: 18px;
+                Text { text: "1024 МБ"; color: Palette.muted; font-size: 13px; }
+                Text { text: root.memory-detected ? root.memory-maximum + " МБ" : "—"; color: Palette.muted; font-size: 13px; horizontal-alignment: right; }
+                Rectangle { width: 184px; background: transparent; }
+            }
+            Text { text: root.memory-recommendation; color: Palette.leaf; font-size: 15px; height: 20px; }
+            Text { text: root.memory-summary; color: Palette.muted; font-size: 14px; height: 20px; }
+            Text {
+                text: root.memory-error == "" ? "Память применяется со следующего запуска. Игра может использовать больше указанного объёма." : root.memory-error;
+                color: root.memory-error == "" ? Palette.muted : #ef9d84;
+                font-size: 14px;
+                wrap: word-wrap;
+                height: 32px;
+            }
+            if root.memory-suggestion != "": HorizontalLayout {
+                height: 34px;
+                spacing: 12px;
+                Text { text: root.memory-suggestion; color: Palette.muted; wrap: word-wrap; vertical-alignment: center; }
+                SettingsButton { width: 188px; label: "Исправить значение"; clicked => { root.suggestion-requested(); } }
+            }
+            Rectangle { height: 1px; background: #294251; }
+            Text { text: "Папка игры"; color: Palette.frost; font-size: 16px; height: 22px; }
+            Text { text: root.installation-path; color: Palette.muted; font-size: 13px; overflow: elide; height: 22px; }
+            Rectangle { vertical-stretch: 1; background: transparent; }
+            HorizontalLayout {
+                height: 46px;
+                spacing: 14px;
+                SettingsButton { width: 138px; label: "Назад"; clicked => { root.back-requested(); } }
+                SettingsButton { width: 226px; label: "Обновить сведения"; clicked => { root.retry-requested(); } }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                SettingsButton {
+                    width: 174px;
+                    label: "Сохранить";
+                    primary: true;
+                    button-enabled: root.memory-save-enabled;
+                    clicked => { root.save-requested(); }
+                }
+            }
+        }
+    }
+}

@@ -272,12 +272,15 @@ async fn fetch_version_metadata_bytes(
     client: &reqwest::Client,
     url: &reqwest::Url,
 ) -> Result<Vec<u8>, VersionMetadataFetchError> {
-    let mut response = client.get(url.clone()).send().await.map_err(|source| {
-        VersionMetadataFetchError::Request {
+    let mut response = client
+        .get(url.clone())
+        .timeout(crate::http::METADATA_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|source| VersionMetadataFetchError::Request {
             url: url.clone(),
             source,
-        }
-    })?;
+        })?;
     let status = response.status();
     if !status.is_success() {
         return Err(VersionMetadataFetchError::HttpStatus {

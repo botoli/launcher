@@ -103,15 +103,15 @@ pub async fn fetch_client_config(
     client: &reqwest::Client,
     url: &reqwest::Url,
 ) -> Result<ClientConfig, ClientConfigFetchError> {
-    let mut response =
-        client
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(|source| ClientConfigFetchError::Request {
-                url: url.clone(),
-                source,
-            })?;
+    let mut response = client
+        .get(url.clone())
+        .timeout(crate::http::METADATA_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|source| ClientConfigFetchError::Request {
+            url: url.clone(),
+            source,
+        })?;
     let status = response.status();
     if !status.is_success() {
         return Err(ClientConfigFetchError::HttpStatus {

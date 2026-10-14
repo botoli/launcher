@@ -8,15 +8,24 @@ use crate::{
 };
 
 pub const MAX_MANIFEST_SIZE: usize = 4 * 1024 * 1024;
-const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const METADATA_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REDIRECTS: usize = 5;
 const USER_AGENT: &str = "EquestrianDreamLauncher/0.1";
 
 pub fn build_http_client() -> Result<reqwest::Client, HttpClientBuildError> {
+    build_http_client_with_read_timeout(HTTP_READ_TIMEOUT)
+}
+
+pub(crate) fn build_http_client_with_read_timeout(
+    timeout: Duration,
+) -> Result<reqwest::Client, HttpClientBuildError> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
-        .timeout(HTTP_TIMEOUT)
+        // A progressing archive may take minutes to finish. Limit inactivity,
+        // not its full duration; metadata requests set their own total deadline.
+        .read_timeout(timeout)
         .connect_timeout(HTTP_CONNECT_TIMEOUT)
         .user_agent(USER_AGENT)
         .build()
@@ -42,15 +51,15 @@ pub async fn fetch_manifest(
     client: &reqwest::Client,
     url: &reqwest::Url,
 ) -> Result<PackManifest, ManifestFetchError> {
-    let mut response =
-        client
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(|source| ManifestFetchError::Request {
-                url: url.clone(),
-                source,
-            })?;
+    let mut response = client
+        .get(url.clone())
+        .timeout(METADATA_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|source| ManifestFetchError::Request {
+            url: url.clone(),
+            source,
+        })?;
     let status = response.status();
     if !status.is_success() {
         return Err(ManifestFetchError::HttpStatus {
@@ -370,6 +379,7 @@ pub(crate) mod test_support {
         chunk_size: usize,
         chunk_delay: Duration,
         advertised_length: Option<usize>,
+        chunked: bool,
     }
 
     impl TestResponse {
@@ -380,6 +390,7 @@ pub(crate) mod test_support {
                 chunk_size: usize::MAX,
                 chunk_delay: Duration::ZERO,
                 advertised_length: None,
+                chunked: false,
             }
         }
 
@@ -390,6 +401,7 @@ pub(crate) mod test_support {
                 chunk_size: usize::MAX,
                 chunk_delay: Duration::ZERO,
                 advertised_length: None,
+                chunked: false,
             }
         }
 
@@ -404,11 +416,17 @@ pub(crate) mod test_support {
                 chunk_size,
                 chunk_delay,
                 advertised_length: None,
+                chunked: false,
             }
         }
 
         pub(crate) fn with_advertised_length(mut self, length: usize) -> Self {
             self.advertised_length = Some(length);
+            self
+        }
+
+        pub(crate) fn chunked(mut self) -> Self {
+            self.chunked = true;
             self
         }
 
@@ -551,10 +569,17 @@ pub(crate) mod test_support {
             _ => "Test Status",
         };
         let content_length = response.advertised_length.unwrap_or(response.body.len());
-        let headers = format!(
-            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            response.status, reason, content_length
-        );
+        let headers = if response.chunked {
+            format!(
+                "HTTP/1.1 {} {}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                response.status, reason
+            )
+        } else {
+            format!(
+                "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response.status, reason, content_length
+            )
+        };
         stream.write_all(headers.as_bytes()).await?;
 
         let chunk_size = response.chunk_size.max(1);
@@ -566,8 +591,19 @@ pub(crate) mod test_support {
             if index + 1 == chunk_count {
                 drop(active_request_guard.take());
             }
+            if response.chunked {
+                stream
+                    .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                    .await?;
+            }
             stream.write_all(chunk).await?;
+            if response.chunked {
+                stream.write_all(b"\r\n").await?;
+            }
             stream.flush().await?;
+        }
+        if response.chunked {
+            stream.write_all(b"0\r\n\r\n").await?;
         }
         Ok(())
     }

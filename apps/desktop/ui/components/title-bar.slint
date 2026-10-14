@@ -4,6 +4,7 @@ import { Palette } from "../theme/palette.slint";
 export component TitleBar inherits Rectangle {
     in-out property <string> nickname;
     in property <string> nickname-error;
+    in property <bool> nickname-enabled: true;
 
     callback minimize-clicked();
     callback close-clicked();
@@ -28,27 +29,28 @@ export component TitleBar inherits Rectangle {
     }
 
     HorizontalLayout {
-        x: 12px;
-        y: 6px;
+        x: 16px;
+        y: 8px;
         width: 350px;
-        height: parent.height - 6px;
+        height: parent.height - 16px;
         spacing: 12px;
         alignment: start;
 
         Image {
-            width: 50px;
-            height: 50px;
+            width: 44px;
+            height: 44px;
             source: AssetCatalog.avatar;
             image-fit: contain;
         }
 
         user-area := Rectangle {
             width: 288px;
-            height: 50px;
+            height: 44px;
             background: transparent;
 
             Rectangle {
-                y: 2px;
+                x: 0px;
+                y: 0px;
                 width: 226px;
                 height: 28px;
                 background: #020a12dd;
@@ -57,6 +59,7 @@ export component TitleBar inherits Rectangle {
                 border-radius: 2px;
 
                 TextInput {
+                    enabled: root.nickname-enabled;
                     x: 7px;
                     y: 2px;
                     width: parent.width - 14px;
@@ -70,10 +73,10 @@ export component TitleBar inherits Rectangle {
             }
 
             Text {
-                y: 32px;
+                y: 30px;
                 width: parent.width;
-                height: 16px;
-                text: root.nickname-error == "" ? "OFFLINE NICKNAME · 3–16" : root.nickname-error;
+                height: 14px;
+                text: root.nickname-error == "" ? "Ник · 3–16 символов" : root.nickname-error;
                 color: root.nickname-error == "" ? Palette.muted : #ef9d84;
                 font-family: "Consolas";
                 font-size: 10px;

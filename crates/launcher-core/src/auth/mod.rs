@@ -106,6 +106,7 @@ pub(crate) async fn send_auth_request(
     endpoint: &reqwest::Url,
 ) -> Result<AuthHttpResponse, AuthHttpError> {
     let mut response = request
+        .timeout(crate::http::METADATA_REQUEST_TIMEOUT)
         .send()
         .await
         .map_err(|source| AuthHttpError::Request {

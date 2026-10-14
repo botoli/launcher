@@ -151,6 +151,7 @@ pub async fn fetch_version_catalog(
 ) -> Result<VersionCatalog, VersionCatalogError> {
     let mut response = client
         .get(catalog_url.clone())
+        .timeout(crate::http::METADATA_REQUEST_TIMEOUT)
         .send()
         .await
         .map_err(|source| VersionCatalogError::Request {

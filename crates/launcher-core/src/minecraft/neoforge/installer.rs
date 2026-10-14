@@ -281,7 +281,7 @@ async fn fetch_checksum(
     let mut response = tokio::select! {
         biased;
         () = cancellation.cancelled() => return Err(NeoForgeInstallerError::Cancelled),
-        result = client.get(url.clone()).send() => result.map_err(|source| NeoForgeInstallerError::Request { url: url.clone(), source })?,
+        result = client.get(url.clone()).timeout(crate::http::METADATA_REQUEST_TIMEOUT).send() => result.map_err(|source| NeoForgeInstallerError::Request { url: url.clone(), source })?,
     };
     if !response.status().is_success() {
         return Err(NeoForgeInstallerError::HttpStatus {
@@ -320,7 +320,7 @@ async fn fetch_content_length(
     let response = tokio::select! {
         biased;
         () = cancellation.cancelled() => return Err(NeoForgeInstallerError::Cancelled),
-        result = client.head(url.clone()).send() => result.map_err(|source| NeoForgeInstallerError::Request { url: url.clone(), source })?,
+        result = client.head(url.clone()).timeout(crate::http::METADATA_REQUEST_TIMEOUT).send() => result.map_err(|source| NeoForgeInstallerError::Request { url: url.clone(), source })?,
     };
     if !response.status().is_success() {
         return Err(NeoForgeInstallerError::HttpStatus {

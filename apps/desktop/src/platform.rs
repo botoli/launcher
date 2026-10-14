@@ -91,6 +91,24 @@ pub fn show_error_message(title: &str, message: &str) {
     let _ = (title, message);
 }
 
+pub fn open_directory(path: &std::path::Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(path)
+            .spawn()?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "opening log directories requires Windows",
+        ))
+    }
+}
+
 #[cfg(windows)]
 fn null_terminated_utf16(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()

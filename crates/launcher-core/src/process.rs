@@ -486,6 +486,13 @@ mod tests {
                 eprintln!("portable stderr marker");
             }
             "exit" => process::exit(23),
+            "crash-with-output" => {
+                println!("portable stdout marker");
+                eprintln!("Synthetic crash: missing mod dependency");
+                std::io::Write::flush(&mut std::io::stdout()).unwrap();
+                std::io::Write::flush(&mut std::io::stderr()).unwrap();
+                process::exit(23);
+            }
             "sleep" => loop {
                 thread::sleep(Duration::from_secs(1));
             },

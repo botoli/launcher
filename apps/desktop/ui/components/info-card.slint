@@ -7,53 +7,57 @@ export component InfoCard inherits Rectangle {
     in property <string> detail;
     in property <bool> healthy: false;
     in property <bool> asset-backed: false;
+    in property <color> detail-color: Palette.frost;
 
     background: root.asset-backed ? transparent : #071524e8;
     border-width: root.asset-backed ? 0px : 1px;
     border-color: Palette.bronze;
     border-radius: 2px;
 
-    HorizontalLayout {
-        padding: 12px;
-        spacing: 12px;
-
-        Image {
-            width: 46px;
-            height: 46px;
-            source: root.icon;
-            image-fit: contain;
-        }
-
-        VerticalLayout {
-            spacing: 2px;
-
+    Image {
+        x: 16px;
+        y: (parent.height - self.height) / 2;
+        width: 40px;
+        height: 40px;
+        source: root.icon;
+        image-fit: contain;
+    }
+    VerticalLayout {
+        x: 72px;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - self.x - 16px;
+        height: 48px;
+        spacing: 4px;
+        HorizontalLayout {
+            height: 18px;
+            spacing: 8px;
             Text {
+                horizontal-stretch: 1;
                 text: root.label;
                 color: root.healthy ? Palette.leaf : Palette.muted;
                 font-size: 12px;
                 font-weight: 600;
-                vertical-alignment: bottom;
+                vertical-alignment: center;
+                overflow: elide;
             }
-
-            Text {
-                text: root.value;
-                color: Palette.frost;
+            if root.detail != "": Text {
+                text: root.detail;
+                color: root.detail-color;
                 font-family: "Consolas";
-                font-size: 17px;
+                font-size: 13px;
                 font-weight: 700;
-                vertical-alignment: top;
+                horizontal-alignment: right;
+                vertical-alignment: center;
             }
         }
-
         Text {
-            visible: root.detail != "";
-            text: root.detail;
+            text: root.value;
             color: Palette.frost;
             font-family: "Consolas";
             font-size: 16px;
             font-weight: 700;
-            horizontal-alignment: right;
             vertical-alignment: center;
+            overflow: elide;
         }
     }
 }

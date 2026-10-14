@@ -12,10 +12,14 @@ export component PixelButton inherits Rectangle {
 
     callback clicked();
 
+    forward-focus: keyboard;
+    accessible-role: button;
+    accessible-label: root.label;
+
     clip: true;
     opacity: root.button-enabled ? 1 : 0.55;
     border-width: root.asset-backed ? 0px : root.primary ? 3px : 2px;
-    border-color: root.primary ? Palette.bronze : Palette.outline;
+    border-color: keyboard.has-focus ? Palette.leaf : root.primary ? Palette.bronze : Palette.outline;
     border-radius: 2px;
     background: root.asset-backed
         ? (area.pressed ? #06111e66 : area.has-hover ? #ffffff1f : transparent)
@@ -78,11 +82,24 @@ export component PixelButton inherits Rectangle {
         }
     }
 
-    area := TouchArea {
-        mouse-cursor: root.button-enabled ? pointer : default;
+    keyboard := FocusScope {
+        enabled: root.button-enabled;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
 
+    area := TouchArea {
+        enabled: root.button-enabled;
+        mouse-cursor: root.button-enabled ? pointer : default;
         clicked => {
             if (root.button-enabled) {
+                keyboard.focus();
                 root.clicked();
             }
         }

@@ -5,8 +5,9 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -24,29 +25,154 @@ const MODS_DIRECTORY_NAME: &str = "mods";
 static BACKUP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Default)]
-pub struct ModsSyncCancellation(Arc<AtomicBool>);
+pub struct ModsSyncCancellation(crate::AcquisitionCancellation);
 
 impl ModsSyncCancellation {
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.cancel();
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.is_cancelled()
+    }
+
+    pub async fn cancelled(&self) {
+        self.0.cancelled().await;
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModsSyncStage {
+    #[default]
+    Checking,
+    Requesting,
+    Downloading,
+    Inspecting,
+    Extracting,
+    Committing,
+    Complete,
+    Unchanged,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ModsSyncProgress {
+    pub stage: ModsSyncStage,
     pub downloaded: u64,
     pub total: Option<u64>,
+    pub elapsed: std::time::Duration,
+    pub idle_for: std::time::Duration,
+    pub bytes_per_second: u64,
+    pub current_file: Option<String>,
+    pub files_completed: usize,
+    pub files_total: Option<usize>,
+    pub file_bytes: u64,
+    pub file_total: Option<u64>,
 }
 
 impl ModsSyncProgress {
-    pub fn fraction(self) -> Option<f32> {
-        self.total
-            .filter(|total| *total > 0)
-            .map(|total| (self.downloaded as f32 / total as f32).clamp(0.0, 1.0))
+    pub fn fraction(&self) -> Option<f32> {
+        match self.stage {
+            ModsSyncStage::Downloading => self
+                .total
+                .filter(|total| *total > 0)
+                .map(|total| (self.downloaded as f64 / total as f64).clamp(0.0, 1.0) as f32),
+            ModsSyncStage::Inspecting | ModsSyncStage::Extracting => {
+                self.files_total.filter(|total| *total > 0).map(|total| {
+                    let current = self
+                        .file_total
+                        .filter(|size| *size > 0)
+                        .map_or(0.0, |size| self.file_bytes as f64 / size as f64);
+                    ((self.files_completed as f64 + current) / total as f64).clamp(0.0, 1.0) as f32
+                })
+            }
+            ModsSyncStage::Complete | ModsSyncStage::Unchanged => Some(1.0),
+            _ => None,
+        }
+    }
+}
+
+struct ModsProgressReporter {
+    callback: Arc<dyn Fn(ModsSyncProgress) + Send + Sync>,
+    snapshot: ModsSyncProgress,
+    started: Instant,
+    last_data: Instant,
+    last_emit: Instant,
+    speed_sample: Instant,
+    speed_bytes: u64,
+    last_log: Instant,
+}
+
+impl ModsProgressReporter {
+    fn new(callback: impl Fn(ModsSyncProgress) + Send + Sync + 'static) -> Self {
+        let now = Instant::now();
+        Self {
+            callback: Arc::new(callback),
+            snapshot: ModsSyncProgress::default(),
+            started: now,
+            last_data: now,
+            last_emit: now,
+            speed_sample: now,
+            speed_bytes: 0,
+            last_log: now,
+        }
+    }
+
+    fn phase(&mut self, stage: ModsSyncStage) {
+        self.snapshot.stage = stage;
+        self.snapshot.current_file = match stage {
+            ModsSyncStage::Requesting | ModsSyncStage::Downloading => Some("mods.zip".to_owned()),
+            _ => None,
+        };
+        self.snapshot.file_bytes = 0;
+        self.snapshot.file_total = None;
+        self.last_data = Instant::now();
+        if stage == ModsSyncStage::Downloading {
+            self.speed_sample = self.last_data;
+        }
+        tracing::info!(?stage, "mods synchronization stage");
+        self.emit(true);
+    }
+
+    fn received(&mut self, bytes: u64) {
+        self.snapshot.downloaded = bytes;
+        self.last_data = Instant::now();
+        self.emit(false);
+    }
+
+    fn emit(&mut self, force: bool) {
+        let now = Instant::now();
+        self.snapshot.elapsed = now.duration_since(self.started);
+        self.snapshot.idle_for = if matches!(
+            self.snapshot.stage,
+            ModsSyncStage::Requesting | ModsSyncStage::Downloading
+        ) {
+            now.duration_since(self.last_data)
+        } else {
+            Duration::ZERO
+        };
+        if self.snapshot.stage == ModsSyncStage::Downloading {
+            let sample_time = now.duration_since(self.speed_sample);
+            if sample_time >= Duration::from_millis(250) {
+                self.snapshot.bytes_per_second =
+                    (self.snapshot.downloaded.saturating_sub(self.speed_bytes) as f64
+                        / sample_time.as_secs_f64()) as u64;
+                self.speed_sample = now;
+                self.speed_bytes = self.snapshot.downloaded;
+            }
+        }
+        if force || now.duration_since(self.last_emit) >= Duration::from_millis(250) {
+            (self.callback)(self.snapshot.clone());
+            self.last_emit = now;
+        }
+        if matches!(
+            self.snapshot.stage,
+            ModsSyncStage::Requesting | ModsSyncStage::Downloading
+        ) && now.duration_since(self.last_log) >= Duration::from_secs(5)
+        {
+            tracing::info!(stage = ?self.snapshot.stage, downloaded = self.snapshot.downloaded, total = self.snapshot.total,
+                bytes_per_second = self.snapshot.bytes_per_second, elapsed_secs = self.snapshot.elapsed.as_secs(), idle_secs = self.snapshot.idle_for.as_secs(), "mods transfer progress");
+            self.last_log = now;
+        }
     }
 }
 
@@ -160,6 +286,8 @@ pub async fn sync_mods<F>(
 where
     F: Fn(ModsSyncProgress) + Send + Sync + 'static,
 {
+    let mut reporter = ModsProgressReporter::new(on_progress);
+    reporter.phase(ModsSyncStage::Checking);
     ensure_not_cancelled(cancellation)?;
     tokio::fs::create_dir_all(data_directory)
         .await
@@ -171,18 +299,25 @@ where
     let state_path = data_directory.join(STATE_FILE_NAME);
     let local_state = read_local_state(&state_path).await?;
     if local_state.mods_hash.as_deref() == Some(config.mods_hash.as_str()) {
+        reporter.phase(ModsSyncStage::Unchanged);
         return Ok(ModsSyncOutcome::Unchanged);
     }
 
     ensure_not_cancelled(cancellation)?;
-    let mut response = client
-        .get(config.mods_url.clone())
-        .send()
-        .await
-        .map_err(|source| ModsSyncError::Request {
-            url: config.mods_url.clone(),
-            source,
-        })?;
+    reporter.phase(ModsSyncStage::Requesting);
+    let request = client.get(config.mods_url.clone()).send();
+    tokio::pin!(request);
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(1));
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    heartbeat.tick().await;
+    let mut response = loop {
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Err(ModsSyncError::Cancelled),
+            result = &mut request => break result.map_err(|source| ModsSyncError::Request { url: config.mods_url.clone(), source })?,
+            _ = heartbeat.tick() => reporter.emit(true),
+        }
+    };
     let status = response.status();
     if !status.is_success() {
         return Err(ModsSyncError::HttpStatus {
@@ -191,6 +326,7 @@ where
         });
     }
     let total = response.content_length();
+    tracing::info!(%status, total, "mods archive response received");
     if total.is_some_and(|length| length > MAX_MODS_ZIP_SIZE) {
         return Err(ModsSyncError::ArchiveTooLarge {
             limit: MAX_MODS_ZIP_SIZE,
@@ -207,16 +343,19 @@ where
     let (file, archive_guard) = temporary.into_parts();
     let mut output = tokio::fs::File::from_std(file);
     let mut downloaded = 0_u64;
-    on_progress(ModsSyncProgress { downloaded, total });
+    reporter.snapshot.total = total;
+    reporter.phase(ModsSyncStage::Downloading);
 
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|source| ModsSyncError::Request {
-            url: config.mods_url.clone(),
-            source,
-        })?
-    {
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Err(ModsSyncError::Cancelled),
+            result = response.chunk() => result.map_err(|source| ModsSyncError::Request { url: config.mods_url.clone(), source })?,
+            _ = heartbeat.tick() => { reporter.emit(true); continue; }
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
         ensure_not_cancelled(cancellation)?;
         downloaded =
             downloaded
@@ -236,7 +375,7 @@ where
                 path: archive_path.clone(),
                 source,
             })?;
-        on_progress(ModsSyncProgress { downloaded, total });
+        reporter.received(downloaded);
     }
     output
         .flush()
@@ -246,6 +385,12 @@ where
             source,
         })?;
     drop(output);
+    reporter.emit(true);
+    tracing::info!(
+        downloaded,
+        elapsed_secs = reporter.snapshot.elapsed.as_secs(),
+        "mods archive download completed"
+    );
 
     let data_directory = data_directory.to_owned();
     let remote_hash = config.mods_hash.clone();
@@ -256,6 +401,7 @@ where
             &data_directory,
             remote_hash,
             &task_cancellation,
+            &mut reporter,
         )
     })
     .await
@@ -288,6 +434,7 @@ fn extract_and_commit(
     data_directory: &Path,
     remote_hash: String,
     cancellation: &ModsSyncCancellation,
+    reporter: &mut ModsProgressReporter,
 ) -> Result<ModsSyncOutcome, ModsSyncError> {
     ensure_not_cancelled(cancellation)?;
     let staging = tempfile::Builder::new()
@@ -301,10 +448,22 @@ fn extract_and_commit(
         path: archive_path.to_owned(),
         source,
     })?;
+    reporter.phase(ModsSyncStage::Inspecting);
     let mut archive = ZipArchive::new(file).map_err(ModsSyncError::InvalidArchive)?;
-    let layout = inspect_layout(&mut archive, cancellation)?;
-    let files_installed = extract_archive(&mut archive, staging.path(), layout, cancellation)?;
+    reporter.snapshot.files_total = Some(archive.len());
+    let contents = inspect_layout(&mut archive, cancellation, reporter)?;
+    reporter.snapshot.files_completed = 0;
+    reporter.snapshot.files_total = Some(contents.file_count);
+    reporter.phase(ModsSyncStage::Extracting);
+    let files_installed = extract_archive(
+        &mut archive,
+        staging.path(),
+        contents.layout,
+        cancellation,
+        reporter,
+    )?;
     ensure_not_cancelled(cancellation)?;
+    reporter.phase(ModsSyncStage::Committing);
 
     let mut state_file = NamedTempFile::new_in(data_directory).map_err(|source| {
         ModsSyncError::CreateTemporaryFile {
@@ -335,6 +494,7 @@ fn extract_and_commit(
         })?;
 
     commit_installation(staging, state_file.into_temp_path(), data_directory)?;
+    reporter.phase(ModsSyncStage::Complete);
     Ok(ModsSyncOutcome::Updated { files_installed })
 }
 
@@ -344,10 +504,16 @@ enum ArchiveLayout {
     ModsDirectory,
 }
 
+struct ArchiveContents {
+    layout: ArchiveLayout,
+    file_count: usize,
+}
+
 fn inspect_layout(
     archive: &mut ZipArchive<File>,
     cancellation: &ModsSyncCancellation,
-) -> Result<ArchiveLayout, ModsSyncError> {
+    reporter: &mut ModsProgressReporter,
+) -> Result<ArchiveContents, ModsSyncError> {
     if archive.len() > MAX_MODS_ZIP_ENTRIES {
         return Err(ModsSyncError::TooManyEntries {
             count: archive.len(),
@@ -358,16 +524,20 @@ fn inspect_layout(
     let mut wrapped = None;
     let mut extracted_size = 0_u64;
     let mut destinations = HashSet::new();
+    let mut file_count = 0;
     for index in 0..archive.len() {
         ensure_not_cancelled(cancellation)?;
         let entry = archive
             .by_index(index)
             .map_err(ModsSyncError::InvalidArchive)?;
         validate_entry_type(&entry)?;
+        reporter.snapshot.current_file = Some(entry.name().to_owned());
         let path = safe_relative_path(entry.name()).ok_or_else(|| ModsSyncError::UnsafeEntry {
             entry: entry.name().to_owned(),
         })?;
         if entry.is_dir() {
+            reporter.snapshot.files_completed = index + 1;
+            reporter.emit(false);
             continue;
         }
 
@@ -401,13 +571,17 @@ fn inspect_layout(
                 limit: MAX_EXTRACTED_MODS_SIZE,
             });
         }
+        file_count += 1;
+        reporter.snapshot.files_completed = index + 1;
+        reporter.emit(false);
     }
-
-    Ok(if wrapped.unwrap_or(false) {
+    reporter.emit(true);
+    let layout = if wrapped.unwrap_or(false) {
         ArchiveLayout::ModsDirectory
     } else {
         ArchiveLayout::Root
-    })
+    };
+    Ok(ArchiveContents { layout, file_count })
 }
 
 fn extract_archive(
@@ -415,6 +589,7 @@ fn extract_archive(
     staging_directory: &Path,
     layout: ArchiveLayout,
     cancellation: &ModsSyncCancellation,
+    reporter: &mut ModsProgressReporter,
 ) -> Result<usize, ModsSyncError> {
     let mut files_installed = 0;
     let mut extracted_size = 0_u64;
@@ -434,7 +609,7 @@ fn extract_archive(
         let Some(relative) = destination_path(&relative, wrapped) else {
             continue;
         };
-        let destination = staging_directory.join(relative);
+        let destination = staging_directory.join(&relative);
         if entry.is_dir() {
             fs::create_dir_all(&destination).map_err(|source| ModsSyncError::WriteEntry {
                 path: destination,
@@ -449,6 +624,11 @@ fn extract_archive(
                 source,
             })?;
         }
+        reporter.snapshot.current_file = Some(relative.to_string_lossy().replace('\\', "/"));
+        reporter.snapshot.file_total = Some(entry.size());
+        reporter.snapshot.file_bytes = 0;
+        tracing::info!(file = ?relative, completed = files_installed, total = reporter.snapshot.files_total, "extracting mod file");
+        reporter.emit(true);
         let mut output =
             File::create(&destination).map_err(|source| ModsSyncError::WriteEntry {
                 path: destination.clone(),
@@ -481,6 +661,8 @@ fn extract_archive(
                     path: destination.clone(),
                     source,
                 })?;
+            reporter.snapshot.file_bytes += read as u64;
+            reporter.emit(false);
         }
         output
             .sync_all()
@@ -489,6 +671,10 @@ fn extract_archive(
                 source,
             })?;
         files_installed += 1;
+        reporter.snapshot.files_completed = files_installed;
+        reporter.snapshot.file_bytes = 0;
+        reporter.snapshot.file_total = None;
+        reporter.emit(true);
     }
     Ok(files_installed)
 }
@@ -712,6 +898,242 @@ mod tests {
         assert_eq!(server.request_count("/mods.zip"), 1);
         assert_eq!(fs::read(root.path().join("mods/a.jar"))?, b"a");
         assert_eq!(read_hash(root.path())?, Some("hash-1".to_owned()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reports_archive_phases_and_each_extracted_mod() -> Result<(), Box<dyn Error>> {
+        let server = TestServer::start().await?;
+        server.route(
+            "/mods.zip",
+            TestResponse::ok(zip_bytes(&[
+                ("mods/a.jar", b"a"),
+                ("mods/sub/b.jar", b"second"),
+            ])?),
+        );
+        let root = TempDir::new()?;
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let capture = events.clone();
+        sync_mods(
+            &build_http_client()?,
+            &client_config(server.url("mods.zip")?, "new"),
+            root.path(),
+            &ModsSyncCancellation::default(),
+            move |event| capture.lock().unwrap().push(event),
+        )
+        .await?;
+        let events = events.lock().unwrap();
+        assert_eq!(events.first().unwrap().stage, ModsSyncStage::Checking);
+        for stage in [
+            ModsSyncStage::Requesting,
+            ModsSyncStage::Downloading,
+            ModsSyncStage::Inspecting,
+            ModsSyncStage::Extracting,
+            ModsSyncStage::Committing,
+            ModsSyncStage::Complete,
+        ] {
+            assert!(
+                events.iter().any(|event| event.stage == stage),
+                "missing stage {stage:?}"
+            );
+        }
+        for file in ["a.jar", "sub/b.jar"] {
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event.stage == ModsSyncStage::Extracting
+                        && event.current_file.as_deref() == Some(file)),
+                "missing mod {file}"
+            );
+        }
+        let done = events.last().unwrap();
+        assert_eq!(done.files_completed, 2);
+        assert_eq!(done.files_total, Some(2));
+        assert_eq!(done.fraction(), Some(1.0));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unknown_size_download_reports_bytes_and_still_installs_mods()
+    -> Result<(), Box<dyn Error>> {
+        let server = TestServer::start().await?;
+        let archive = zip_bytes(&[("mods/one.jar", b"one")])?;
+        let expected = archive.len() as u64;
+        server.route(
+            "/mods.zip",
+            TestResponse::slow(archive, 8, Duration::from_millis(20)).chunked(),
+        );
+        let root = TempDir::new()?;
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let capture = events.clone();
+        sync_mods(
+            &build_http_client()?,
+            &client_config(server.url("mods.zip")?, "streamed"),
+            root.path(),
+            &ModsSyncCancellation::default(),
+            move |event| capture.lock().unwrap().push(event),
+        )
+        .await?;
+        let events = events.lock().unwrap();
+        let downloads: Vec<_> = events
+            .iter()
+            .filter(|event| event.stage == ModsSyncStage::Downloading)
+            .collect();
+        assert!(
+            downloads
+                .iter()
+                .all(|event| event.total.is_none() && event.fraction().is_none())
+        );
+        assert_eq!(downloads.last().unwrap().downloaded, expected);
+        assert!(downloads.iter().any(|event| event.bytes_per_second > 0));
+        assert_eq!(fs::read(root.path().join("mods/one.jar"))?, b"one");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn waiting_for_data_reports_heartbeat_and_can_be_cancelled_immediately()
+    -> Result<(), Box<dyn Error>> {
+        let server = TestServer::start().await?;
+        server.route(
+            "/mods.zip",
+            TestResponse::slow(
+                zip_bytes(&[("new.jar", b"new")])?,
+                4,
+                Duration::from_secs(60),
+            ),
+        );
+        let root = TempDir::new()?;
+        fs::create_dir(root.path().join("mods"))?;
+        fs::write(root.path().join("mods/old.jar"), b"old")?;
+        fs::write(root.path().join("state.json"), r#"{"modsHash":"old"}"#)?;
+        let cancellation = ModsSyncCancellation::default();
+        let cancel = cancellation.clone();
+        let error = tokio::time::timeout(
+            Duration::from_secs(3),
+            sync_mods(
+                &build_http_client()?,
+                &client_config(server.url("mods.zip")?, "new"),
+                root.path(),
+                &cancellation,
+                move |event| {
+                    if event.stage == ModsSyncStage::Downloading
+                        && event.idle_for >= Duration::from_secs(1)
+                    {
+                        cancel.cancel();
+                    }
+                },
+            ),
+        )
+        .await?
+        .unwrap_err();
+        assert!(matches!(error, ModsSyncError::Cancelled));
+        assert_eq!(fs::read(root.path().join("mods/old.jar"))?, b"old");
+        assert_eq!(read_hash(root.path())?, Some("old".to_owned()));
+        assert_eq!(fs::read_dir(root.path())?.count(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancellation_on_a_named_mod_preserves_the_previous_set() -> Result<(), Box<dyn Error>>
+    {
+        let server = TestServer::start().await?;
+        server.route(
+            "/mods.zip",
+            TestResponse::ok(zip_bytes(&[("mods/a.jar", b"a"), ("mods/b.jar", b"b")])?),
+        );
+        let root = TempDir::new()?;
+        fs::create_dir(root.path().join("mods"))?;
+        fs::write(root.path().join("mods/old.jar"), b"old")?;
+        fs::write(root.path().join("state.json"), r#"{"modsHash":"old"}"#)?;
+        let cancellation = ModsSyncCancellation::default();
+        let cancel = cancellation.clone();
+        let error = sync_mods(
+            &build_http_client()?,
+            &client_config(server.url("mods.zip")?, "new"),
+            root.path(),
+            &cancellation,
+            move |event| {
+                if event.stage == ModsSyncStage::Extracting
+                    && event.current_file.as_deref() == Some("b.jar")
+                {
+                    cancel.cancel();
+                }
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, ModsSyncError::Cancelled));
+        assert_eq!(fs::read(root.path().join("mods/old.jar"))?, b"old");
+        assert!(!root.path().join("mods/a.jar").exists());
+        assert_eq!(read_hash(root.path())?, Some("old".to_owned()));
+        assert_eq!(fs::read_dir(root.path())?.count(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_mods_download_can_outlast_a_read_timeout() -> Result<(), Box<dyn Error>> {
+        let server = TestServer::start().await?;
+        let archive = zip_bytes(&[("mods/a.jar", b"expected mod")])?;
+        server.route(
+            "/mods.zip",
+            TestResponse::slow(archive, 4, std::time::Duration::from_millis(20)),
+        );
+        let root = TempDir::new()?;
+        let client = crate::http::build_http_client_with_read_timeout(
+            std::time::Duration::from_millis(250),
+        )?;
+        let started = std::time::Instant::now();
+        let result = sync_mods(
+            &client,
+            &client_config(server.url("mods.zip")?, "slow"),
+            root.path(),
+            &ModsSyncCancellation::default(),
+            |_| {},
+        )
+        .await?;
+        assert!(started.elapsed() > std::time::Duration::from_millis(250));
+        assert_eq!(result, ModsSyncOutcome::Updated { files_installed: 1 });
+        assert_eq!(fs::read(root.path().join("mods/a.jar"))?, b"expected mod");
+        assert_eq!(read_hash(root.path())?, Some("slow".to_owned()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stalled_mods_download_times_out_and_preserves_existing_installation()
+    -> Result<(), Box<dyn Error>> {
+        let server = TestServer::start().await?;
+        server.route(
+            "/mods.zip",
+            TestResponse::slow(
+                zip_bytes(&[("new.jar", b"new")])?,
+                4,
+                std::time::Duration::from_secs(1),
+            ),
+        );
+        let root = TempDir::new()?;
+        fs::create_dir(root.path().join("mods"))?;
+        fs::write(root.path().join("mods/old.jar"), b"old")?;
+        fs::write(root.path().join("state.json"), r#"{"modsHash":"old"}"#)?;
+        let client = crate::http::build_http_client_with_read_timeout(
+            std::time::Duration::from_millis(100),
+        )?;
+        let error = sync_mods(
+            &client,
+            &client_config(server.url("mods.zip")?, "new"),
+            root.path(),
+            &ModsSyncCancellation::default(),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, ModsSyncError::Request { source, .. } if source.is_timeout()));
+        assert_eq!(fs::read(root.path().join("mods/old.jar"))?, b"old");
+        assert_eq!(read_hash(root.path())?, Some("old".to_owned()));
+        assert_eq!(
+            fs::read_dir(root.path())?.count(),
+            2,
+            "temporary download must be removed"
+        );
         Ok(())
     }
 

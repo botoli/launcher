@@ -22,6 +22,8 @@ use super::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VanillaLaunchConfig {
+    pub heap_memory: Option<crate::HeapMemory>,
+    pub jvm_args: Vec<String>,
     pub version_id: String,
     pub java_major_override: Option<u32>,
     pub server_address: Option<String>,
@@ -70,6 +72,7 @@ impl VanillaLaunchCancellation {
 #[derive(Debug)]
 pub enum VanillaLaunchError {
     Cancelled,
+    Memory(crate::InvalidHeapMemory),
     VersionCatalog(VersionCatalogError),
     VersionResolve(VersionResolveError),
     InvalidMetadataUrl {
@@ -94,6 +97,7 @@ impl fmt::Display for VanillaLaunchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Cancelled => formatter.write_str("vanilla launch was cancelled"),
+            Self::Memory(source) => write!(formatter, "invalid heap settings: {source}"),
             Self::VersionCatalog(source) => {
                 write!(
                     formatter,
@@ -137,6 +141,7 @@ impl fmt::Display for VanillaLaunchError {
 impl Error for VanillaLaunchError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Memory(source) => Some(source),
             Self::VersionCatalog(source) => Some(source),
             Self::VersionResolve(source) => Some(source),
             Self::InvalidMetadataUrl { source, .. } => Some(source),
@@ -229,6 +234,10 @@ where
     P: FnOnce(LaunchSpec) -> Result<ProcessHandle, ProcessError>,
 {
     let on_progress: Arc<dyn Fn(VanillaLaunchProgress) + Send + Sync> = Arc::new(on_progress);
+    if let Some(heap) = config.heap_memory {
+        crate::HeapMemory::new(heap.min_memory_mib, heap.max_memory_mib)
+            .map_err(VanillaLaunchError::Memory)?;
+    }
     tracing::info!("resolving Minecraft");
     report(&on_progress, VanillaLaunchStage::ResolvingVersion, None);
     ensure_not_cancelled(cancellation)?;
@@ -300,7 +309,7 @@ where
     let preparation_java = java_runtime.clone();
     let preparation_layout = layout.clone();
     let preparation_context = context.clone();
-    let launch_spec = tokio::task::spawn_blocking(move || {
+    let mut launch_spec = tokio::task::spawn_blocking(move || {
         prepare_vanilla_launch_spec(
             &preparation_metadata,
             &preparation_java,
@@ -311,6 +320,13 @@ where
     .await
     .map_err(|source| VanillaLaunchError::RuntimePreparationTask { source })?
     .map_err(VanillaLaunchError::RuntimePreparation)?;
+    launch_spec
+        .jvm_args
+        .extend(config.jvm_args.iter().map(std::ffi::OsString::from));
+    if let Some(heap) = config.heap_memory {
+        heap.replace_arguments(&mut launch_spec.jvm_args)
+            .map_err(VanillaLaunchError::Memory)?;
+    }
     ensure_not_cancelled(cancellation)?;
 
     tracing::info!("launching");
@@ -542,6 +558,41 @@ pub(crate) mod tests {
         for path in fixture.runtime_routes() {
             assert_eq!(server.request_count(path), 1, "re-download for {path}");
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn selected_memory_reaches_the_vanilla_process_command() -> Result<(), Box<dyn Error>> {
+        let server = TestServer::start().await?;
+        let temp = tempfile::tempdir()?;
+        let mut fixture = SyntheticFixture::new(&server, temp.path(), FixtureMode::Valid)?;
+        fixture.config.heap_memory = Some(crate::HeapMemory::new(1536, 6143)?);
+        fixture.config.jvm_args = vec![
+            "-Xmx2G".to_owned(),
+            "-XX:InitialHeapSize=123".to_owned(),
+            "-Duser.option=kept".to_owned(),
+        ];
+        let captured_spec = Arc::new(Mutex::new(None));
+        let process = launch_with_fixture(
+            &fixture,
+            &Arc::new(Mutex::new(Vec::new())),
+            &captured_spec,
+            &Arc::new(Mutex::new(Vec::new())),
+            VanillaLaunchCancellation::default(),
+        )
+        .await?;
+        let spec = captured_spec.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            spec.jvm_args
+                .iter()
+                .filter(|arg| crate::launch_options::is_heap_argument(arg))
+                .count(),
+            2
+        );
+        assert!(spec.jvm_args.contains(&"-Xms1536M".into()));
+        assert!(spec.jvm_args.contains(&"-Xmx6143M".into()));
+        assert!(spec.jvm_args.contains(&"-Duser.option=kept".into()));
+        assert!(collect_output(process).await.2.status.success());
         Ok(())
     }
 
@@ -1064,6 +1115,8 @@ pub(crate) mod tests {
 
     fn config_for_paths(runtime_root: PathBuf, game_directory: PathBuf) -> VanillaLaunchConfig {
         VanillaLaunchConfig {
+            heap_memory: None,
+            jvm_args: Vec::new(),
             version_id: VERSION_ID.to_owned(),
             java_major_override: None,
             server_address: None,

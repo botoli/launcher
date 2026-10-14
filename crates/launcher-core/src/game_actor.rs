@@ -3,9 +3,11 @@ use std::{fmt, future::Future, pin::Pin, sync::Arc};
 use tokio::sync::{mpsc, watch};
 
 use crate::{
-    ClientConfig, LauncherCommand, LauncherState, LauncherStatus, MinecraftLaunchIdentity,
-    ProcessEvent, ProcessHandle, VanillaLaunchCancellation, VanillaLaunchConfig,
+    ClientConfig, HeapMemory, InvalidHeapMemory, LauncherCommand, LauncherDiagnostic,
+    LauncherFailure, LauncherStage, LauncherState, LauncherStatus, MinecraftLaunchIdentity,
+    ProcessEvent, ProcessHandle, UserLaunchOptions, VanillaLaunchCancellation, VanillaLaunchConfig,
     VanillaLaunchError, VanillaLaunchProgress, VanillaLaunchStage, WorkflowControl,
+    diagnostics::LogTail,
     launch_vanilla_with_identity,
     minecraft::neoforge::{
         NeoForgeLaunchCancellation, NeoForgeLaunchConfig, NeoForgeLaunchError,
@@ -112,16 +114,45 @@ impl LauncherGameConfig {
     }
 
     pub(crate) fn neoforge_for_client_config(&self, config: &ClientConfig) -> NeoForgeLaunchConfig {
-        let configured = self.for_client_config(config);
-        NeoForgeLaunchConfig::from_client_config(configured.vanilla, config)
+        let mut configured = NeoForgeLaunchConfig::from_client_config(self.vanilla.clone(), config);
+        if let Some(heap) = self.vanilla.heap_memory {
+            configured.min_memory = heap.min_memory_mib;
+            configured.max_memory = heap.max_memory_mib;
+        }
+        configured
     }
 
-    pub(crate) fn for_client_config(&self, config: &ClientConfig) -> Self {
+    pub(crate) fn for_client_config(
+        &self,
+        config: &ClientConfig,
+        options: UserLaunchOptions,
+    ) -> Result<Self, InvalidHeapMemory> {
         let mut configured = self.clone();
+        configured.vanilla.heap_memory = Some(HeapMemory::resolve(
+            config.min_memory,
+            config.max_memory,
+            options,
+        )?);
+        configured.vanilla.jvm_args = config.jvm_args.clone();
         configured.vanilla.version_id = config.version.clone();
         configured.vanilla.java_major_override = Some(config.java_version);
         configured.vanilla.server_address = config.server_address().map(str::to_owned);
-        configured
+        Ok(configured)
+    }
+
+    pub(crate) fn with_launch_options(
+        &self,
+        options: UserLaunchOptions,
+    ) -> Result<Self, InvalidHeapMemory> {
+        let mut configured = self.clone();
+        if let Some(maximum) = options.max_memory_mib {
+            let minimum = configured
+                .vanilla
+                .heap_memory
+                .map_or(1024, |heap| heap.min_memory_mib);
+            configured.vanilla.heap_memory = Some(HeapMemory::new(minimum.min(maximum), maximum)?);
+        }
+        Ok(configured)
     }
 
     #[cfg(test)]
@@ -177,13 +208,14 @@ pub(super) async fn run_game_workflow(
         publish_state(
             &progress_states,
             LauncherState::new(
-                map_stage(progress.stage),
+                LauncherStatus::Launching,
                 if progress.stage == VanillaLaunchStage::AcquiringRuntime {
                     progress.progress
                 } else {
                     None
                 },
-            ),
+            )
+            .at_stage(map_stage(progress.stage)),
         );
     });
 
@@ -213,7 +245,7 @@ pub(super) async fn run_neoforge_game_workflow(
         publish_state(
             &progress_states,
             LauncherState::new(
-                map_neoforge_stage(progress.stage),
+                LauncherStatus::Launching,
                 if matches!(
                     progress.stage,
                     NeoForgeLaunchStage::AcquiringVanilla | NeoForgeLaunchStage::AcquiringNeoForge
@@ -222,7 +254,8 @@ pub(super) async fn run_neoforge_game_workflow(
                 } else {
                     None
                 },
-            ),
+            )
+            .at_stage(map_neoforge_stage(progress.stage)),
         );
     });
     let client = game.client.clone();
@@ -253,11 +286,38 @@ impl GameLaunchError {
     }
 }
 
+impl GameLaunchError {
+    fn failure(&self) -> LauncherFailure {
+        match self {
+            Self::Vanilla(VanillaLaunchError::Java(
+                crate::JavaError::JavaNotFound { required_major }
+                | crate::JavaError::VersionMismatch { required_major, .. },
+            ))
+            | Self::NeoForge(NeoForgeLaunchError::Java(
+                crate::JavaError::JavaNotFound { required_major }
+                | crate::JavaError::VersionMismatch { required_major, .. },
+            )) => LauncherFailure::Java {
+                required_major: *required_major,
+            },
+            _ => LauncherFailure::GameLaunch,
+        }
+    }
+}
+
 impl fmt::Display for GameLaunchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Vanilla(error) => error.fmt(formatter),
             Self::NeoForge(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for GameLaunchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Vanilla(error) => Some(error),
+            Self::NeoForge(error) => Some(error),
         }
     }
 }
@@ -279,12 +339,12 @@ where
                     Ok(Err(error)) if error.is_cancelled() => WorkflowControl::Cancel,
                     Ok(Err(error)) => {
                         tracing::error!(%error, "game launch failed");
-                        publish_state(states, LauncherState::new(LauncherStatus::Error, None));
+                        publish_state(states, LauncherState::with_diagnostic(error.failure(), LauncherDiagnostic::from_error(&error)));
                         WorkflowControl::Continue
                     }
                     Err(error) => {
                         tracing::error!(%error, "game launch task failed");
-                        publish_state(states, LauncherState::new(LauncherStatus::Error, None));
+                        publish_state(states, LauncherState::with_diagnostic(LauncherFailure::Internal, LauncherDiagnostic::from_error(&error)));
                         WorkflowControl::Continue
                     }
                 };
@@ -310,24 +370,24 @@ where
     }
 }
 
-const fn map_stage(stage: VanillaLaunchStage) -> LauncherStatus {
+const fn map_stage(stage: VanillaLaunchStage) -> LauncherStage {
     match stage {
-        VanillaLaunchStage::ResolvingVersion
-        | VanillaLaunchStage::CheckingJava
-        | VanillaLaunchStage::AcquiringRuntime
-        | VanillaLaunchStage::PreparingRuntime
-        | VanillaLaunchStage::Launching => LauncherStatus::Launching,
+        VanillaLaunchStage::ResolvingVersion => LauncherStage::ResolvingVersion,
+        VanillaLaunchStage::CheckingJava => LauncherStage::CheckingJava,
+        VanillaLaunchStage::AcquiringRuntime => LauncherStage::AcquiringVanilla,
+        VanillaLaunchStage::PreparingRuntime => LauncherStage::PreparingRuntime,
+        VanillaLaunchStage::Launching => LauncherStage::StartingProcess,
     }
 }
 
-const fn map_neoforge_stage(stage: NeoForgeLaunchStage) -> LauncherStatus {
+const fn map_neoforge_stage(stage: NeoForgeLaunchStage) -> LauncherStage {
     match stage {
-        NeoForgeLaunchStage::ResolvingVersion
-        | NeoForgeLaunchStage::CheckingJava
-        | NeoForgeLaunchStage::AcquiringVanilla
-        | NeoForgeLaunchStage::AcquiringNeoForge
-        | NeoForgeLaunchStage::PreparingRuntime
-        | NeoForgeLaunchStage::Launching => LauncherStatus::Launching,
+        NeoForgeLaunchStage::ResolvingVersion => LauncherStage::ResolvingVersion,
+        NeoForgeLaunchStage::CheckingJava => LauncherStage::CheckingJava,
+        NeoForgeLaunchStage::AcquiringVanilla => LauncherStage::AcquiringVanilla,
+        NeoForgeLaunchStage::AcquiringNeoForge => LauncherStage::AcquiringNeoForge,
+        NeoForgeLaunchStage::PreparingRuntime => LauncherStage::PreparingRuntime,
+        NeoForgeLaunchStage::Launching => LauncherStage::StartingProcess,
     }
 }
 
@@ -337,18 +397,24 @@ async fn monitor_process(
     mut process: ProcessHandle,
 ) -> WorkflowControl {
     tracing::info!("running");
-    publish_state(states, LauncherState::new(LauncherStatus::Running, None));
+    publish_state(
+        states,
+        LauncherState::new(LauncherStatus::Running, None).at_stage(LauncherStage::Running),
+    );
     let mut cancel_requested = false;
     let mut stop_requested = false;
+    let mut log_tail = LogTail::default();
 
     loop {
         tokio::select! {
             event = process.next_event() => {
                 match event {
                     Some(ProcessEvent::Stdout(bytes)) => {
+                        log_tail.push("stdout", &bytes);
                         tracing::info!(target: "minecraft_stdout", "{}", String::from_utf8_lossy(&bytes).trim_end());
                     }
                     Some(ProcessEvent::Stderr(bytes)) => {
+                        log_tail.push("stderr", &bytes);
                         tracing::warn!(target: "minecraft_stderr", "{}", String::from_utf8_lossy(&bytes).trim_end());
                     }
                     None => break,
@@ -382,8 +448,31 @@ async fn monitor_process(
         Ok(exit) if exit.status.success() => {
             publish_state(states, LauncherState::new(LauncherStatus::Ready, Some(1.0)));
         }
-        Ok(_) | Err(_) => {
-            publish_state(states, LauncherState::new(LauncherStatus::Error, None));
+        Ok(exit) => {
+            tracing::error!(status = %exit.status, "Minecraft exited with an error");
+            let mut diagnostic = LauncherDiagnostic::message(format!(
+                "Minecraft завершился с ошибкой: {}",
+                exit.status
+            ));
+            diagnostic.log_tail = log_tail.into_string();
+            publish_state(
+                states,
+                LauncherState::with_diagnostic(
+                    LauncherFailure::GameExit {
+                        code: exit.status.code(),
+                    },
+                    diagnostic,
+                ),
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to monitor Minecraft");
+            let mut diagnostic = LauncherDiagnostic::from_error(&error);
+            diagnostic.log_tail = log_tail.into_string();
+            publish_state(
+                states,
+                LauncherState::with_diagnostic(LauncherFailure::GameLaunch, diagnostic),
+            );
         }
     }
     WorkflowControl::Continue
@@ -425,6 +514,7 @@ mod tests {
         Running,
         AcquisitionUntilCancelled,
         BeforeSpawnUntilCancelled,
+        MissingJava,
     }
 
     struct FakeLauncher {
@@ -527,8 +617,17 @@ mod tests {
                             stage: VanillaLaunchStage::Launching,
                             progress: None,
                         });
-                        spawn_test_helper("exit", &working_directory)
+                        spawn_test_helper("crash-with-output", &working_directory)
                             .map_err(VanillaLaunchError::Process)
+                    }
+                    FakeMode::MissingJava => {
+                        on_progress(VanillaLaunchProgress {
+                            stage: VanillaLaunchStage::CheckingJava,
+                            progress: None,
+                        });
+                        Err(VanillaLaunchError::Java(crate::JavaError::JavaNotFound {
+                            required_major: 21,
+                        }))
                     }
                     FakeMode::Running => {
                         on_progress(VanillaLaunchProgress {
@@ -612,7 +711,16 @@ mod tests {
 
         core.send_command(LauncherCommand::Play).await.unwrap();
 
-        wait_for_status(&mut states, LauncherStatus::Error).await;
+        let state = wait_for_status(&mut states, LauncherStatus::Error).await;
+        assert_eq!(
+            state.failure(),
+            Some(&LauncherFailure::GameExit { code: Some(23) })
+        );
+        assert_eq!(state.stage(), Some(LauncherStage::Running));
+        let diagnostic = state.diagnostic().unwrap();
+        assert!(diagnostic.log_tail.contains("portable stdout marker"));
+        assert!(diagnostic.log_tail.contains("missing mod dependency"));
+        assert!(diagnostic.message.contains("23"));
     }
 
     #[tokio::test]
@@ -631,6 +739,32 @@ mod tests {
         core.send_command(LauncherCommand::Cancel).await.unwrap();
         wait_for_status(&mut states, LauncherStatus::Ready).await;
         assert_eq!(calls.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn missing_java_keeps_the_stage_cause_and_allows_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let (core, calls, _) = fake_core(temp.path(), FakeMode::MissingJava, None);
+        core.set_offline_profile(profile());
+        let mut states = core.subscribe_state();
+        for expected_calls in 1..=2 {
+            core.send_command(LauncherCommand::Play).await.unwrap();
+            wait_for_status(&mut states, LauncherStatus::Checking).await;
+            let state = wait_for_status(&mut states, LauncherStatus::Error).await;
+            assert_eq!(
+                state.failure(),
+                Some(&LauncherFailure::Java { required_major: 21 })
+            );
+            assert_eq!(state.stage(), Some(LauncherStage::CheckingJava));
+            assert!(
+                state
+                    .diagnostic()
+                    .unwrap()
+                    .message
+                    .contains("Java 21 was not found")
+            );
+            assert_eq!(calls.load(Ordering::Acquire), expected_calls);
+        }
     }
 
     #[tokio::test]
@@ -784,6 +918,8 @@ mod tests {
             precondition_met: Arc::clone(&precondition_met),
         };
         let vanilla = VanillaLaunchConfig {
+            heap_memory: None,
+            jvm_args: Vec::new(),
             version_id: "synthetic".to_owned(),
             java_major_override: None,
             server_address: None,

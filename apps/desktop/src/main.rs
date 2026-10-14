@@ -1,20 +1,29 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app_config;
+mod diagnostics;
 mod logging;
+mod memory_settings;
 mod platform;
+mod server_monitor;
 mod settings;
+mod system_memory;
 
 use std::{process::ExitCode, rc::Rc};
 
 use app_config::{AppConfigError, DesktopAppConfig};
+use diagnostics::DiagnosticsController;
 use launcher_core::{
     ClientConfig, ClientConfigFetchError, HttpClientBuildError, LauncherCommand, LauncherCore,
     LauncherFailure, LauncherGameConfig, LauncherState, LauncherStatus, OfflineProfile,
     OfflineProfileError, VanillaLaunchConfig, build_http_client, fetch_client_config,
 };
+use launcher_core::{LauncherDiagnostic, LauncherStage};
+use launcher_core::{ModsSyncProgress, ModsSyncStage};
 use logging::LoggingError;
+use memory_settings::MemorySettingsController;
 use platform::SingleInstanceState;
+use server_monitor::{ServerMonitor, ServerView, apply_server_view};
 use settings::{ProfileController, SettingsStore};
 use slint::{ComponentHandle, LogicalPosition};
 use thiserror::Error;
@@ -75,8 +84,6 @@ impl DesktopConfigError {
 struct DesktopDisplayState {
     version: String,
     server_address: String,
-    server_online: bool,
-    ping_ms: i32,
 }
 
 impl Default for DesktopDisplayState {
@@ -84,8 +91,6 @@ impl Default for DesktopDisplayState {
         Self {
             version: "—".to_owned(),
             server_address: "—".to_owned(),
-            server_online: true,
-            ping_ms: 43,
         }
     }
 }
@@ -95,7 +100,6 @@ impl DesktopDisplayState {
         Self {
             version: config.version.clone(),
             server_address: config.server_address().unwrap_or("—").to_owned(),
-            ..Self::default()
         }
     }
 }
@@ -105,6 +109,7 @@ struct ConfiguredLauncher {
     profile: Option<OfflineProfile>,
     profile_controller: ProfileController,
     display: DesktopDisplayState,
+    client_config: ClientConfig,
 }
 
 fn main() -> ExitCode {
@@ -149,29 +154,60 @@ fn run() -> Result<(), DesktopError> {
 
     let runtime = tokio::runtime::Runtime::new()?;
     let window = AppWindow::new()?;
+    let diagnostics = DiagnosticsController::new(runtime.handle().clone(), app_config.paths.logs());
+    diagnostics.bind(&window);
     apply_static_display_state(&window, &DesktopDisplayState::default());
     bind_window_callbacks(&window);
+    window.set_installation_path(app_config.paths.game().display().to_string().into());
 
     match runtime.block_on(configure_launcher(runtime.handle(), app_config)) {
         Ok(configured) => {
             apply_static_display_state(&window, &configured.display);
             apply_initial_profile(&window, &configured.core, configured.profile.as_ref());
+            let server_monitor = ServerMonitor::start(
+                &window,
+                runtime.handle(),
+                configured.client_config.server_address().unwrap_or(""),
+            );
 
             let mut state_updates = configured.core.subscribe_state();
             let initial_state = state_updates.borrow_and_update().clone();
             apply_launcher_state(&window, &initial_state);
 
+            let profile_controller = Rc::new(configured.profile_controller);
+            let memory_controller = MemorySettingsController::new(
+                profile_controller.clone(),
+                configured.core.clone(),
+                &configured.client_config,
+            );
+            memory_controller.bind(&window);
+
             bind_play_command(
                 &window,
                 configured.core.clone(),
                 runtime.handle().clone(),
-                Rc::new(configured.profile_controller),
+                profile_controller,
+                memory_controller.clone(),
+                diagnostics.clone(),
             );
-            listen_for_state_updates(&window, state_updates, runtime.handle());
+            listen_for_state_updates(
+                &window,
+                state_updates,
+                runtime.handle(),
+                memory_controller,
+                diagnostics,
+                server_monitor,
+            );
         }
         Err(error) => {
             tracing::error!(%error, "launcher configuration error");
             apply_configuration_error(&window, &error.user_message());
+            diagnostics.show(
+                &window,
+                "Ошибка конфигурации",
+                &LauncherDiagnostic::from_error(&error),
+                "Получение конфигурации сборки при открытии лаунчера",
+            );
         }
     }
 
@@ -230,6 +266,7 @@ async fn configure_launcher(
         profile,
         profile_controller,
         display: DesktopDisplayState::from_client_config(&client_config),
+        client_config,
     })
 }
 
@@ -240,6 +277,8 @@ fn vanilla_launch_config(
     server_address: Option<String>,
 ) -> Result<VanillaLaunchConfig, DesktopConfigError> {
     Ok(VanillaLaunchConfig {
+        heap_memory: None,
+        jvm_args: Vec::new(),
         version_id,
         java_major_override,
         server_address,
@@ -265,8 +304,14 @@ fn apply_static_display_state(window: &AppWindow, state: &DesktopDisplayState) {
     window.set_nickname_error("".into());
     window.set_version(state.version.as_str().into());
     window.set_server_address(state.server_address.as_str().into());
-    window.set_server_online(state.server_online);
-    window.set_ping_ms(state.ping_ms);
+    apply_server_view(
+        window,
+        &if state.server_address == "—" {
+            ServerView::Unconfigured
+        } else {
+            ServerView::Checking
+        },
+    );
 }
 
 fn apply_initial_profile(
@@ -288,7 +333,7 @@ fn apply_launcher_state(window: &AppWindow, state: &LauncherState) {
         apply_client_config(window, config);
     }
 
-    let (status_text, detail_text) = match state.status() {
+    let (mut status_text, mut detail_text) = match state.status() {
         LauncherStatus::Idle => ("Ожидание".to_owned(), "Лаунчер готов к запуску".to_owned()),
         LauncherStatus::Checking => (
             "Проверка".to_owned(),
@@ -321,9 +366,36 @@ fn apply_launcher_state(window: &AppWindow, state: &LauncherState) {
                 "Ошибка модов".to_owned(),
                 "Не удалось безопасно обновить mods.zip".to_owned(),
             ),
+            Some(LauncherFailure::LaunchOptions) => (
+                "Ошибка параметров ОЗУ".to_owned(),
+                "Проверьте настройки памяти и параметры сборки".to_owned(),
+            ),
             Some(LauncherFailure::UnsupportedLoader(loader)) => (
                 "Неподдерживаемый загрузчик".to_owned(),
                 format!("Загрузчик {loader} пока не поддерживается"),
+            ),
+            Some(LauncherFailure::Installation) => (
+                "Ошибка файлов сборки".to_owned(),
+                "Не удалось загрузить или проверить файлы Minecraft".to_owned(),
+            ),
+            Some(LauncherFailure::GameLaunch) => (
+                "Не удалось запустить Minecraft".to_owned(),
+                "Откройте логи: там указана причина сбоя Java или подготовки игры".to_owned(),
+            ),
+            Some(LauncherFailure::Java { required_major }) => (
+                format!("Не найдена Java {required_major}"),
+                format!("Установите Java {required_major} x64 или проверьте JAVA_HOME и PATH"),
+            ),
+            Some(LauncherFailure::GameExit { code }) => (
+                "Minecraft завершился с ошибкой".to_owned(),
+                code.map_or_else(
+                    || "Процесс игры аварийно завершился. Подробности в логах".to_owned(),
+                    |code| format!("Код завершения: {code}. Подробности в логах"),
+                ),
+            ),
+            Some(LauncherFailure::Internal) => (
+                "Ошибка лаунчера".to_owned(),
+                "Операция прервана. Подробности доступны в логах".to_owned(),
             ),
             None => (
                 "Ошибка".to_owned(),
@@ -331,6 +403,33 @@ fn apply_launcher_state(window: &AppWindow, state: &LauncherState) {
             ),
         },
     };
+    if state.status() != LauncherStatus::Error
+        && let Some(stage) = state.stage()
+    {
+        let (title, detail) = launch_stage_text(stage);
+        status_text = title.to_owned();
+        detail_text = detail.to_owned();
+        if let Some(config) = state.client_config() {
+            match stage {
+                LauncherStage::CheckingJava => {
+                    detail_text = format!("Поиск установленной Java {} x64", config.java_version)
+                }
+                LauncherStage::AcquiringVanilla => {
+                    detail_text = format!(
+                        "Minecraft {}: загрузка клиента, библиотек и ресурсов",
+                        config.version
+                    )
+                }
+                LauncherStage::AcquiringNeoForge => {
+                    detail_text = format!(
+                        "NeoForge {}: загрузка загрузчика и его библиотек",
+                        config.loader_version
+                    )
+                }
+                _ => {}
+            }
+        }
+    }
     let progress = state.progress().map(|value| value.clamp(0.0, 1.0));
     let progress_value = progress.unwrap_or_default();
     let progress_percent = (progress_value * 100.0).round() as i32;
@@ -343,17 +442,229 @@ fn apply_launcher_state(window: &AppWindow, state: &LauncherState) {
     );
     let play_enabled = matches!(
         state.status(),
-        LauncherStatus::Idle | LauncherStatus::Ready | LauncherStatus::ProfileRequired
+        LauncherStatus::Idle
+            | LauncherStatus::Ready
+            | LauncherStatus::ProfileRequired
+            | LauncherStatus::Error
     );
 
     window.set_launcher_status(status_text.into());
     window.set_launcher_detail(detail_text.into());
+    window.set_progress_metrics("".into());
     window.set_progress(progress_value);
     window.set_progress_percent(progress_percent);
     window.set_has_progress(progress.is_some());
     window.set_loading(loading);
     window.set_play_enabled(play_enabled);
+    window.set_play_label(
+        match state.status() {
+            LauncherStatus::Checking => "Проверка...",
+            LauncherStatus::Downloading => "Загрузка...",
+            LauncherStatus::Launching => "Запуск...",
+            LauncherStatus::Running => "Игра запущена",
+            _ => "Играть",
+        }
+        .into(),
+    );
     window.set_horseshoe_angle((progress_value * 1_800.0) % 360.0);
+    if state.status() != LauncherStatus::Error
+        && let Some(progress) = state.mods_progress()
+    {
+        apply_mods_progress(window, progress);
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} МБ", bytes as f64 / (1024.0 * 1024.0)).replace('.', ",")
+    } else if bytes >= 1024 {
+        format!("{:.1} КБ", bytes as f64 / 1024.0).replace('.', ",")
+    } else {
+        format!("{bytes} Б")
+    }
+}
+
+fn mods_progress_text(progress: &ModsSyncProgress) -> (String, String, String) {
+    let seconds = progress.elapsed.as_secs();
+    let elapsed = format!("{:02}:{:02}", seconds / 60, seconds % 60);
+    let file = progress
+        .current_file
+        .as_deref()
+        .unwrap_or("mods.zip")
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let count = progress.files_total.map_or_else(
+        || progress.files_completed.to_string(),
+        |total| format!("{} / {total}", progress.files_completed),
+    );
+    match progress.stage {
+        ModsSyncStage::Checking => (
+            "Проверка модов".to_owned(),
+            "Сравнение сохранённой версии модов с версией сервера".to_owned(),
+            format!("Прошло {elapsed}"),
+        ),
+        ModsSyncStage::Requesting => (
+            "Запрос архива модов".to_owned(),
+            format!(
+                "{file} — ожидаем ответ сервера уже {} с",
+                progress.idle_for.as_secs()
+            ),
+            format!("Прошло {elapsed}"),
+        ),
+        ModsSyncStage::Downloading => {
+            let amount = progress.total.map_or_else(
+                || format_bytes(progress.downloaded),
+                |total| {
+                    format!(
+                        "{} / {}",
+                        format_bytes(progress.downloaded),
+                        format_bytes(total)
+                    )
+                },
+            );
+            let detail = if progress.idle_for >= std::time::Duration::from_secs(1) {
+                format!(
+                    "{file} — ожидаем новые данные уже {} с",
+                    progress.idle_for.as_secs()
+                )
+            } else if progress.total.is_none() {
+                format!("{file} — общий ZIP с модами; сервер не сообщил размер архива")
+            } else {
+                format!("{file} — скачивается общий ZIP; затем начнётся распаковка модов")
+            };
+            (
+                "Скачивание модов".to_owned(),
+                detail,
+                format!(
+                    "Получено {amount} • {}/с • {elapsed}",
+                    format_bytes(progress.bytes_per_second)
+                ),
+            )
+        }
+        ModsSyncStage::Inspecting => (
+            "Проверка архива модов".to_owned(),
+            format!("Проверяется запись: {file}"),
+            format!("Проверено {count} записей • {elapsed}"),
+        ),
+        ModsSyncStage::Extracting => {
+            let current = if progress.current_file.is_some() {
+                format!("Распаковка: {file}")
+            } else {
+                "Подготовка файлов из архива".to_owned()
+            };
+            let size = progress.file_total.map_or_else(String::new, |total| {
+                format!(
+                    " • файл {} / {}",
+                    format_bytes(progress.file_bytes),
+                    format_bytes(total)
+                )
+            });
+            (
+                "Установка модов".to_owned(),
+                current,
+                format!("Готово {count} файлов{size} • {elapsed}"),
+            )
+        }
+        ModsSyncStage::Committing => (
+            "Сохранение модов".to_owned(),
+            "Обновление папки mods и сохранение версии набора".to_owned(),
+            format!(
+                "Подготовлено {} файлов • {elapsed}",
+                progress.files_completed
+            ),
+        ),
+        ModsSyncStage::Complete => (
+            "Моды обновлены".to_owned(),
+            "Набор модов установлен и сохранён".to_owned(),
+            format!(
+                "Установлено {} файлов • {elapsed}",
+                progress.files_completed
+            ),
+        ),
+        ModsSyncStage::Unchanged => (
+            "Моды актуальны".to_owned(),
+            "Версия набора совпадает; повторное скачивание не требуется".to_owned(),
+            format!("Прошло {elapsed}"),
+        ),
+    }
+}
+
+fn apply_mods_progress(window: &AppWindow, progress: &ModsSyncProgress) {
+    let (status, detail, metrics) = mods_progress_text(progress);
+    window.set_launcher_status(status.into());
+    window.set_launcher_detail(detail.into());
+    window.set_progress_metrics(metrics.into());
+    let fraction = progress.fraction();
+    window.set_has_progress(fraction.is_some());
+    window.set_progress(fraction.unwrap_or(0.0));
+    window.set_progress_percent((fraction.unwrap_or(0.0) * 100.0).round() as i32);
+    window.set_horseshoe_angle((progress.elapsed.as_secs_f32() * 45.0) % 360.0);
+}
+
+fn launch_stage_text(stage: LauncherStage) -> (&'static str, &'static str) {
+    match stage {
+        LauncherStage::FetchingConfig => (
+            "Получение конфигурации",
+            "Запрос версии игры и параметров сборки с сервера",
+        ),
+        LauncherStage::CheckingFiles => (
+            "Проверка файлов",
+            "Проверка наличия, размеров и контрольных сумм файлов сборки",
+        ),
+        LauncherStage::DownloadingPack => (
+            "Загрузка сборки",
+            "Загрузка отсутствующих и повреждённых файлов",
+        ),
+        LauncherStage::SynchronizingMods => (
+            "Обновление модов",
+            "Проверка версии модов, загрузка и распаковка архива",
+        ),
+        LauncherStage::ResolvingVersion => (
+            "Выбор версии Minecraft",
+            "Получение метаданных выбранной версии игры",
+        ),
+        LauncherStage::CheckingJava => ("Проверка Java", "Поиск установленной Java нужной версии"),
+        LauncherStage::AcquiringVanilla => (
+            "Загрузка Minecraft",
+            "Загрузка клиента, библиотек и игровых ресурсов",
+        ),
+        LauncherStage::AcquiringNeoForge => (
+            "Подготовка NeoForge",
+            "Загрузка загрузчика и выполнение установочных операций",
+        ),
+        LauncherStage::PreparingRuntime => (
+            "Подготовка к запуску",
+            "Подготовка библиотек и параметров запуска игры",
+        ),
+        LauncherStage::StartingProcess => (
+            "Запуск Minecraft",
+            "Создание процесса Java и передача параметров игры",
+        ),
+        LauncherStage::Running => (
+            "Игра запущена",
+            "Minecraft работает. После закрытия игры кнопки станут доступны",
+        ),
+    }
+}
+
+fn apply_launch_pending(window: &AppWindow) {
+    window.set_progress_metrics("".into());
+    window.set_loading(true);
+    window.set_play_enabled(false);
+    window.set_play_label("Проверка...".into());
+    window.set_settings_visible(false);
+    window.set_launcher_status("Начало запуска".into());
+    window.set_launcher_detail("Проверка профиля и параметров сборки".into());
+    window.set_has_progress(false);
+    window.set_progress(0.0);
+    window.set_progress_percent(0);
 }
 
 fn apply_client_config(window: &AppWindow, config: &ClientConfig) {
@@ -362,6 +673,7 @@ fn apply_client_config(window: &AppWindow, config: &ClientConfig) {
 }
 
 fn apply_configuration_error(window: &AppWindow, message: &str) {
+    window.set_progress_metrics("".into());
     window.set_launcher_status("Ошибка конфигурации".into());
     window.set_launcher_detail(message.into());
     window.set_progress(0.0);
@@ -373,6 +685,7 @@ fn apply_configuration_error(window: &AppWindow, message: &str) {
 }
 
 fn apply_profile_required(window: &AppWindow, message: &str) {
+    window.set_progress_metrics("".into());
     window.set_nickname_error(message.into());
     window.set_launcher_status("Требуется профиль".into());
     window.set_launcher_detail(message.into());
@@ -385,9 +698,6 @@ fn apply_profile_required(window: &AppWindow, message: &str) {
 }
 
 fn bind_window_callbacks(window: &AppWindow) {
-    window.on_settings_requested(|| {
-        tracing::debug!("Settings clicked; no settings action is configured");
-    });
     window.on_mods_requested(|| {
         tracing::debug!("Mods clicked; no mods action is configured");
     });
@@ -412,9 +722,20 @@ fn bind_play_command(
     core: LauncherCore,
     runtime: Handle,
     profile_controller: Rc<ProfileController>,
+    memory_controller: Rc<MemorySettingsController>,
+    diagnostics: Rc<DiagnosticsController>,
 ) {
     let window_weak = window.as_weak();
     window.on_play_requested(move |nickname| {
+        let Some(window) = window_weak.upgrade() else {
+            return;
+        };
+        if window.get_loading() || !window.get_play_enabled() {
+            return;
+        }
+        if !memory_controller.prepare_play(&window) {
+            return;
+        }
         let profile = match profile_controller.accept_username(nickname.to_string()) {
             Ok(profile) => profile,
             Err(error) => {
@@ -432,13 +753,34 @@ fn bind_play_command(
         }
         tracing::info!("profile configured");
 
+        diagnostics.clear(&window);
+        apply_launch_pending(&window);
+
         let core = core.clone();
-        let command_task = runtime.spawn(async move {
-            if let Err(error) = core.send_command(LauncherCommand::Play).await {
-                tracing::error!(%error, "failed to send PLAY command to launcher core");
+        let command_task =
+            runtime.spawn(async move { core.send_command(LauncherCommand::Play).await });
+        let weak = window_weak.clone();
+        let diagnostics = diagnostics.clone();
+        let _ = slint::spawn_local(async move {
+            let failure = match command_task.await {
+                Ok(Ok(())) => return,
+                Ok(Err(error)) => LauncherDiagnostic::from_error(&error),
+                Err(error) => LauncherDiagnostic::from_error(&error),
+            };
+            tracing::error!(reason = %failure.message, "failed to send PLAY command");
+            if let Some(window) = weak.upgrade() {
+                apply_configuration_error(
+                    &window,
+                    "Обработчик запуска недоступен. Перезапустите лаунчер.",
+                );
+                diagnostics.show(
+                    &window,
+                    "Ошибка запуска",
+                    &failure,
+                    "Отправка команды запуска",
+                );
             }
         });
-        drop(command_task);
     });
 }
 
@@ -457,20 +799,35 @@ fn listen_for_state_updates(
     window: &AppWindow,
     mut states: watch::Receiver<LauncherState>,
     runtime: &Handle,
+    memory_controller: Rc<MemorySettingsController>,
+    diagnostics: Rc<DiagnosticsController>,
+    server_monitor: Rc<ServerMonitor>,
 ) {
     let window_weak = window.as_weak();
+    let (ui_tx, mut ui_rx) = watch::channel::<Option<LauncherState>>(None);
+    // Keep only the latest snapshot while the UI is busy drawing a frame.
+    slint::spawn_local(async move {
+        while ui_rx.changed().await.is_ok() {
+            let Some(state) = ui_rx.borrow_and_update().clone() else {
+                continue;
+            };
+            if let Some(window) = window_weak.upgrade() {
+                if let Some(config) = state.client_config() {
+                    memory_controller.observe_config(&window, config);
+                    server_monitor.observe_address(&window, config.server_address());
+                }
+                apply_launcher_state(&window, &state);
+                diagnostics.observe_state(&window, &state);
+            } else {
+                break;
+            }
+        }
+    })
+    .expect("UI event loop is available");
     let listener_task = runtime.spawn(async move {
         while states.changed().await.is_ok() {
             let state = states.borrow_and_update().clone();
-            let update_window = window_weak.clone();
-            let invoke_result = slint::invoke_from_event_loop(move || {
-                if let Some(window) = update_window.upgrade() {
-                    apply_launcher_state(&window, &state);
-                }
-            });
-
-            if let Err(error) = invoke_result {
-                tracing::debug!(%error, "launcher state listener stopped with the UI event loop");
+            if ui_tx.send(Some(state)).is_err() {
                 break;
             }
         }

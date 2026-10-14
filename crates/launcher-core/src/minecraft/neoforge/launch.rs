@@ -442,7 +442,7 @@ mod tests {
             &context,
             NeoForgeJvmOptions {
                 min_memory: 2048,
-                max_memory: 4096,
+                max_memory: 6144,
                 backend_jvm_args: &["-Dfile.encoding=UTF-8".to_owned()],
             },
         )
@@ -457,9 +457,16 @@ mod tests {
             &spec.jvm_args[..3],
             [
                 OsStr::new("-Xms2048M"),
-                OsStr::new("-Xmx4096M"),
+                OsStr::new("-Xmx6144M"),
                 OsStr::new("-Dfile.encoding=UTF-8"),
             ]
+        );
+        assert_eq!(
+            spec.jvm_args
+                .iter()
+                .filter(|argument| is_heap_argument(&argument.to_string_lossy()))
+                .count(),
+            2
         );
         assert!(spec.jvm_args.iter().any(|argument| {
             argument
@@ -565,6 +572,31 @@ mod tests {
                 }
             ),
             Err(NeoForgeLaunchError::ConflictingMemoryArgument { .. })
+        ));
+        let mut neoforge = neoforge;
+        neoforge
+            .arguments
+            .jvm
+            .push(crate::minecraft::Argument::Plain(
+                "-XX:MaxHeapSize=123".to_owned(),
+            ));
+        assert!(matches!(
+            build_neoforge_launch_spec(
+                &vanilla,
+                &neoforge,
+                &java,
+                &layout,
+                &context,
+                NeoForgeJvmOptions {
+                    min_memory: 2048,
+                    max_memory: 6144,
+                    backend_jvm_args: &[],
+                }
+            ),
+            Err(NeoForgeLaunchError::ConflictingMemoryArgument {
+                argument_source: "distribution metadata",
+                ..
+            })
         ));
     }
 

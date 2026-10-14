@@ -1,15 +1,18 @@
 pub mod auth;
 mod client_config;
+mod diagnostics;
 mod game_actor;
 pub mod http;
 pub mod identity;
 pub mod installer;
 pub mod java;
+mod launch_options;
 pub mod manifest;
 pub mod minecraft;
 mod mods;
 pub mod process;
 mod process_command;
+mod server_status;
 pub mod source;
 pub mod verification;
 
@@ -29,6 +32,7 @@ pub use client_config::{
     ClientConfig, ClientConfigFetchError, ClientServer, LauncherBackendConfig,
     LauncherBackendConfigError, MAX_CLIENT_CONFIG_SIZE, fetch_client_config,
 };
+pub use diagnostics::LauncherDiagnostic;
 pub use game_actor::LauncherGameConfig;
 pub use http::{
     HttpClientBuildError, HttpFileSource, HttpFileSourceConfigError, HttpUrlError,
@@ -43,6 +47,7 @@ pub use installer::{
     InstallCancellation, InstallError, InstallProgress, InstallSummary, install_files,
 };
 pub use java::{JavaError, JavaRuntime, find_java};
+pub use launch_options::{HeapMemory, InvalidHeapMemory, UserLaunchOptions};
 pub use manifest::{ManifestFile, PackManifest};
 pub use minecraft::neoforge::{
     NeoForgeDistribution, NeoForgeInstallProfile, NeoForgeInstallerError, NeoForgeJvmOptions,
@@ -74,12 +79,13 @@ pub use minecraft::{
 };
 pub use mods::{
     MAX_EXTRACTED_MODS_SIZE, MAX_MODS_ZIP_ENTRIES, MAX_MODS_ZIP_SIZE, ModsSyncCancellation,
-    ModsSyncError, ModsSyncOutcome, ModsSyncProgress, sync_mods,
+    ModsSyncError, ModsSyncOutcome, ModsSyncProgress, ModsSyncStage, sync_mods,
 };
 pub use process::{
     LaunchSpec, LaunchSpecError, ProcessCancellation, ProcessError, ProcessEvent, ProcessExit,
     ProcessHandle, build_command, launch_process,
 };
+pub use server_status::{ServerStatusError, ping_minecraft_server};
 pub use source::{FileChunkStream, FileSource, FileSourceError, LocalFileSource, SourceFuture};
 use tokio::{
     runtime::Handle,
@@ -113,12 +119,30 @@ pub enum LauncherStatus {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LauncherStage {
+    FetchingConfig,
+    CheckingFiles,
+    DownloadingPack,
+    SynchronizingMods,
+    ResolvingVersion,
+    CheckingJava,
+    AcquiringVanilla,
+    AcquiringNeoForge,
+    PreparingRuntime,
+    StartingProcess,
+    Running,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LauncherState {
     status: LauncherStatus,
     progress: Option<f32>,
     client_config: Option<ClientConfig>,
     failure: Option<LauncherFailure>,
+    stage: Option<LauncherStage>,
+    diagnostic: Option<LauncherDiagnostic>,
+    mods_progress: Option<ModsSyncProgress>,
 }
 
 impl LauncherState {
@@ -138,22 +162,50 @@ impl LauncherState {
         self.failure.as_ref()
     }
 
+    pub const fn stage(&self) -> Option<LauncherStage> {
+        self.stage
+    }
+    pub const fn diagnostic(&self) -> Option<&LauncherDiagnostic> {
+        self.diagnostic.as_ref()
+    }
+    pub const fn mods_progress(&self) -> Option<&ModsSyncProgress> {
+        self.mods_progress.as_ref()
+    }
+
     const fn new(status: LauncherStatus, progress: Option<f32>) -> Self {
         Self {
             status,
             progress,
             client_config: None,
             failure: None,
+            stage: None,
+            diagnostic: None,
+            mods_progress: None,
         }
     }
 
     fn with_failure(failure: LauncherFailure) -> Self {
-        Self {
-            status: LauncherStatus::Error,
-            progress: None,
-            client_config: None,
-            failure: Some(failure),
-        }
+        let mut state = Self::new(LauncherStatus::Error, None);
+        state.failure = Some(failure);
+        state
+    }
+
+    fn at_stage(mut self, stage: LauncherStage) -> Self {
+        self.stage = Some(stage);
+        self
+    }
+
+    fn with_mods_progress(progress: ModsSyncProgress) -> Self {
+        let mut state = Self::new(LauncherStatus::Downloading, progress.fraction())
+            .at_stage(LauncherStage::SynchronizingMods);
+        state.mods_progress = Some(progress);
+        state
+    }
+
+    fn with_diagnostic(failure: LauncherFailure, diagnostic: LauncherDiagnostic) -> Self {
+        let mut state = Self::with_failure(failure);
+        state.diagnostic = Some(diagnostic);
+        state
     }
 
     const fn stable(status: LauncherStatus) -> Self {
@@ -172,7 +224,13 @@ impl LauncherState {
 pub enum LauncherFailure {
     ClientConfig,
     ModsSync,
+    LaunchOptions,
     UnsupportedLoader(String),
+    Installation,
+    GameLaunch,
+    Java { required_major: u32 },
+    GameExit { code: Option<i32> },
+    Internal,
 }
 
 impl Default for LauncherState {
@@ -197,6 +255,7 @@ pub struct LauncherCore {
     command_tx: mpsc::Sender<LauncherCommand>,
     state_rx: watch::Receiver<LauncherState>,
     offline_profile_tx: watch::Sender<Option<OfflineProfile>>,
+    launch_options_tx: watch::Sender<UserLaunchOptions>,
 }
 
 impl LauncherCore {
@@ -335,11 +394,13 @@ impl LauncherCore {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
         let (state_tx, state_rx) = watch::channel(LauncherState::default());
         let (offline_profile_tx, offline_profile_rx) = watch::channel(None);
+        let (launch_options_tx, launch_options_rx) = watch::channel(UserLaunchOptions::default());
 
         let actor = runtime.spawn(run_actor(
             command_rx,
             state_tx,
             offline_profile_rx,
+            launch_options_rx,
             installation,
         ));
         drop(actor);
@@ -348,6 +409,7 @@ impl LauncherCore {
             command_tx,
             state_rx,
             offline_profile_tx,
+            launch_options_tx,
         }
     }
 
@@ -368,6 +430,10 @@ impl LauncherCore {
 
     pub fn clear_offline_profile(&self) {
         self.offline_profile_tx.send_replace(None);
+    }
+
+    pub fn set_launch_options(&self, options: UserLaunchOptions) {
+        self.launch_options_tx.send_replace(options);
     }
 }
 
@@ -404,7 +470,7 @@ enum WorkflowControl {
 
 enum VerificationStep {
     Finished(Result<VerificationResult, VerificationError>),
-    TaskFailed,
+    TaskFailed(tokio::task::JoinError),
     Cancel,
     Stop,
 }
@@ -417,7 +483,7 @@ enum ManifestStep {
 
 enum InstallStep {
     Finished(Result<InstallSummary, InstallError>),
-    TaskFailed,
+    TaskFailed(tokio::task::JoinError),
     Cancel,
     Stop,
 }
@@ -430,7 +496,7 @@ enum ClientConfigStep {
 
 enum ModsSyncStep {
     Finished(Result<ModsSyncOutcome, ModsSyncError>),
-    TaskFailed,
+    TaskFailed(tokio::task::JoinError),
     Cancel,
     Stop,
 }
@@ -439,6 +505,7 @@ async fn run_actor(
     mut commands: mpsc::Receiver<LauncherCommand>,
     states: watch::Sender<LauncherState>,
     offline_profiles: watch::Receiver<Option<OfflineProfile>>,
+    launch_options: watch::Receiver<UserLaunchOptions>,
     installation: Installation,
 ) {
     while let Some(command) = commands.recv().await {
@@ -446,8 +513,15 @@ async fn run_actor(
             LauncherCommand::Play if is_playable(states.borrow().status()) => {
                 let resume_status = states.borrow().status();
 
-                match run_play_workflow(&mut commands, &states, &offline_profiles, &installation)
-                    .await
+                let options = *launch_options.borrow();
+                match run_play_workflow(
+                    &mut commands,
+                    &states,
+                    &offline_profiles,
+                    &installation,
+                    options,
+                )
+                .await
                 {
                     WorkflowControl::Continue => {}
                     WorkflowControl::Cancel => {
@@ -466,11 +540,18 @@ async fn run_play_workflow(
     states: &watch::Sender<LauncherState>,
     offline_profiles: &watch::Receiver<Option<OfflineProfile>>,
     installation: &Installation,
+    options: UserLaunchOptions,
 ) -> WorkflowControl {
     tracing::info!("checking pack");
     publish_state(
         states,
-        LauncherState::new(LauncherStatus::Checking, Some(0.0)),
+        LauncherState::new(LauncherStatus::Checking, None).at_stage(
+            if installation.backend.is_some() {
+                LauncherStage::FetchingConfig
+            } else {
+                LauncherStage::CheckingFiles
+            },
+        ),
     );
 
     if let control @ (WorkflowControl::Cancel | WorkflowControl::Stop) =
@@ -486,6 +567,7 @@ async fn run_play_workflow(
             offline_profiles,
             installation,
             backend,
+            options,
         )
         .await;
     }
@@ -493,8 +575,14 @@ async fn run_play_workflow(
     let manifest =
         match fetch_pack_manifest_or_receive_control(commands, &installation.manifest).await {
             ManifestStep::Finished(Ok(manifest)) => manifest,
-            ManifestStep::Finished(Err(_)) => {
-                publish_state(states, LauncherState::new(LauncherStatus::Error, None));
+            ManifestStep::Finished(Err(error)) => {
+                publish_state(
+                    states,
+                    LauncherState::with_diagnostic(
+                        LauncherFailure::Installation,
+                        LauncherDiagnostic::from_error(&error),
+                    ),
+                );
                 return WorkflowControl::Continue;
             }
             ManifestStep::Cancel => return WorkflowControl::Cancel,
@@ -505,8 +593,24 @@ async fn run_play_workflow(
         match verify_manifest_or_receive_control(commands, &installation.root_dir, &manifest).await
         {
             VerificationStep::Finished(Ok(result)) => result,
-            VerificationStep::Finished(Err(_)) | VerificationStep::TaskFailed => {
-                publish_state(states, LauncherState::new(LauncherStatus::Error, None));
+            VerificationStep::Finished(Err(error)) => {
+                publish_state(
+                    states,
+                    LauncherState::with_diagnostic(
+                        LauncherFailure::Installation,
+                        LauncherDiagnostic::from_error(&error),
+                    ),
+                );
+                return WorkflowControl::Continue;
+            }
+            VerificationStep::TaskFailed(error) => {
+                publish_state(
+                    states,
+                    LauncherState::with_diagnostic(
+                        LauncherFailure::Internal,
+                        LauncherDiagnostic::from_error(&error),
+                    ),
+                );
                 return WorkflowControl::Continue;
             }
             VerificationStep::Cancel => return WorkflowControl::Cancel,
@@ -517,7 +621,8 @@ async fn run_play_workflow(
         tracing::info!("downloading pack");
         publish_state(
             states,
-            LauncherState::new(LauncherStatus::Downloading, Some(0.0)),
+            LauncherState::new(LauncherStatus::Downloading, Some(0.0))
+                .at_stage(LauncherStage::DownloadingPack),
         );
         match install_or_receive_control(
             commands,
@@ -529,21 +634,58 @@ async fn run_play_workflow(
         .await
         {
             InstallStep::Finished(Ok(_)) => {}
-            InstallStep::Finished(Err(_)) | InstallStep::TaskFailed => {
-                publish_state(states, LauncherState::new(LauncherStatus::Error, None));
+            InstallStep::Finished(Err(error)) => {
+                publish_state(
+                    states,
+                    LauncherState::with_diagnostic(
+                        LauncherFailure::Installation,
+                        LauncherDiagnostic::from_error(&error),
+                    ),
+                );
+                return WorkflowControl::Continue;
+            }
+            InstallStep::TaskFailed(error) => {
+                publish_state(
+                    states,
+                    LauncherState::with_diagnostic(
+                        LauncherFailure::Internal,
+                        LauncherDiagnostic::from_error(&error),
+                    ),
+                );
                 return WorkflowControl::Continue;
             }
             InstallStep::Cancel => return WorkflowControl::Cancel,
             InstallStep::Stop => return WorkflowControl::Stop,
         }
 
+        publish_state(
+            states,
+            LauncherState::new(LauncherStatus::Checking, None)
+                .at_stage(LauncherStage::CheckingFiles),
+        );
         let verification =
             match verify_manifest_or_receive_control(commands, &installation.root_dir, &manifest)
                 .await
             {
                 VerificationStep::Finished(Ok(result)) => result,
-                VerificationStep::Finished(Err(_)) | VerificationStep::TaskFailed => {
-                    publish_state(states, LauncherState::new(LauncherStatus::Error, None));
+                VerificationStep::Finished(Err(error)) => {
+                    publish_state(
+                        states,
+                        LauncherState::with_diagnostic(
+                            LauncherFailure::Installation,
+                            LauncherDiagnostic::from_error(&error),
+                        ),
+                    );
+                    return WorkflowControl::Continue;
+                }
+                VerificationStep::TaskFailed(error) => {
+                    publish_state(
+                        states,
+                        LauncherState::with_diagnostic(
+                            LauncherFailure::Internal,
+                            LauncherDiagnostic::from_error(&error),
+                        ),
+                    );
                     return WorkflowControl::Continue;
                 }
                 VerificationStep::Cancel => return WorkflowControl::Cancel,
@@ -551,7 +693,13 @@ async fn run_play_workflow(
             };
 
         if !verification.is_valid() {
-            publish_state(states, LauncherState::new(LauncherStatus::Error, None));
+            publish_state(
+                states,
+                LauncherState::with_diagnostic(
+                    LauncherFailure::Installation,
+                    LauncherDiagnostic::message("Проверка файлов после установки не пройдена"),
+                ),
+            );
             return WorkflowControl::Continue;
         }
     }
@@ -569,7 +717,21 @@ async fn run_play_workflow(
     };
     let identity = MinecraftLaunchIdentity::from(&profile);
 
-    game_actor::run_game_workflow(commands, states, identity, game).await
+    let game = match game.with_launch_options(options) {
+        Ok(game) => game,
+        Err(error) => {
+            tracing::error!(%error, "invalid launch options");
+            publish_state(
+                states,
+                LauncherState::with_diagnostic(
+                    LauncherFailure::LaunchOptions,
+                    LauncherDiagnostic::from_error(&error),
+                ),
+            );
+            return WorkflowControl::Continue;
+        }
+    };
+    game_actor::run_game_workflow(commands, states, identity, &game).await
 }
 
 async fn run_backend_play_workflow(
@@ -578,6 +740,7 @@ async fn run_backend_play_workflow(
     offline_profiles: &watch::Receiver<Option<OfflineProfile>>,
     installation: &Installation,
     backend: &BackendInstallation,
+    options: UserLaunchOptions,
 ) -> WorkflowControl {
     let config = match fetch_client_config_or_receive_control(commands, backend).await {
         ClientConfigStep::Finished(result) => match *result {
@@ -586,7 +749,10 @@ async fn run_backend_play_workflow(
                 tracing::error!(%error, "failed to fetch Minecraft client config");
                 publish_state(
                     states,
-                    LauncherState::with_failure(LauncherFailure::ClientConfig),
+                    LauncherState::with_diagnostic(
+                        LauncherFailure::ClientConfig,
+                        LauncherDiagnostic::from_error(&error),
+                    ),
                 );
                 return WorkflowControl::Continue;
             }
@@ -596,10 +762,31 @@ async fn run_backend_play_workflow(
     };
     publish_client_config(states, config.clone());
 
+    let configured_game = match installation
+        .game
+        .as_ref()
+        .map(|game| game.for_client_config(&config, options))
+        .transpose()
+    {
+        Ok(game) => game,
+        Err(error) => {
+            tracing::error!(%error, "invalid backend or user heap settings");
+            publish_state(
+                states,
+                LauncherState::with_diagnostic(
+                    LauncherFailure::LaunchOptions,
+                    LauncherDiagnostic::from_error(&error),
+                ),
+            );
+            return WorkflowControl::Continue;
+        }
+    };
+
     tracing::info!(mods_hash = %config.mods_hash, "synchronizing mods archive");
     publish_state(
         states,
-        LauncherState::new(LauncherStatus::Downloading, Some(0.0)),
+        LauncherState::new(LauncherStatus::Downloading, Some(0.0))
+            .at_stage(LauncherStage::SynchronizingMods),
     );
     match sync_mods_or_receive_control(
         commands,
@@ -618,15 +805,21 @@ async fn run_backend_play_workflow(
             tracing::error!(%error, "failed to synchronize mods archive");
             publish_state(
                 states,
-                LauncherState::with_failure(LauncherFailure::ModsSync),
+                LauncherState::with_diagnostic(
+                    LauncherFailure::ModsSync,
+                    LauncherDiagnostic::from_error(&error),
+                ),
             );
             return WorkflowControl::Continue;
         }
-        ModsSyncStep::TaskFailed => {
-            tracing::error!("mods synchronization task failed");
+        ModsSyncStep::TaskFailed(error) => {
+            tracing::error!(%error, "mods synchronization task failed");
             publish_state(
                 states,
-                LauncherState::with_failure(LauncherFailure::ModsSync),
+                LauncherState::with_diagnostic(
+                    LauncherFailure::ModsSync,
+                    LauncherDiagnostic::from_error(&error),
+                ),
             );
             return WorkflowControl::Continue;
         }
@@ -644,7 +837,7 @@ async fn run_backend_play_workflow(
         return WorkflowControl::Continue;
     };
 
-    let Some(game) = &installation.game else {
+    let Some(game) = &configured_game else {
         publish_state(states, LauncherState::new(LauncherStatus::Ready, Some(1.0)));
         return WorkflowControl::Continue;
     };
@@ -659,8 +852,7 @@ async fn run_backend_play_workflow(
     let identity = MinecraftLaunchIdentity::from(&profile);
     match loader {
         BackendLoader::Vanilla => {
-            let game = game.for_client_config(&config);
-            game_actor::run_game_workflow(commands, states, identity, &game).await
+            game_actor::run_game_workflow(commands, states, identity, game).await
         }
         BackendLoader::NeoForge => {
             let neoforge = game.neoforge_for_client_config(&config);
@@ -727,7 +919,7 @@ async fn sync_mods_or_receive_control(
             move |progress| {
                 publish_state(
                     &progress_states,
-                    LauncherState::new(LauncherStatus::Downloading, progress.fraction()),
+                    LauncherState::with_mods_progress(progress),
                 );
             },
         )
@@ -739,7 +931,7 @@ async fn sync_mods_or_receive_control(
             result = &mut task => {
                 return match result {
                     Ok(result) => ModsSyncStep::Finished(result),
-                    Err(_) => ModsSyncStep::TaskFailed,
+                    Err(error) => ModsSyncStep::TaskFailed(error),
                 };
             }
             command = commands.recv() => match command {
@@ -800,7 +992,7 @@ async fn verify_manifest_or_receive_control(
             result = &mut verification_task => {
                 return match result {
                     Ok(result) => VerificationStep::Finished(result),
-                    Err(_) => VerificationStep::TaskFailed,
+                    Err(error) => VerificationStep::TaskFailed(error),
                 };
             }
             command = commands.recv() => match command {
@@ -852,7 +1044,7 @@ async fn install_or_receive_control(
             result = &mut install_task => {
                 return match result {
                     Ok(result) => InstallStep::Finished(result),
-                    Err(_) => InstallStep::TaskFailed,
+                    Err(error) => InstallStep::TaskFailed(error),
                 };
             }
             command = commands.recv() => match command {
@@ -898,12 +1090,27 @@ fn is_playable(status: LauncherStatus) -> bool {
             | LauncherStatus::Ready
             | LauncherStatus::AuthenticationRequired
             | LauncherStatus::ProfileRequired
+            | LauncherStatus::Error
     )
 }
 
 fn publish_state(states: &watch::Sender<LauncherState>, mut state: LauncherState) {
     if state.client_config.is_none() {
         state.client_config = states.borrow().client_config.clone();
+    }
+    if state.stage.is_none()
+        && matches!(
+            state.status,
+            LauncherStatus::Error | LauncherStatus::Downloading
+        )
+    {
+        state.stage = states.borrow().stage;
+    }
+    if let Some(diagnostic) = &state.diagnostic {
+        tracing::error!(reason = %diagnostic.message, "launcher workflow failed");
+    }
+    if state.status == LauncherStatus::Error && state.mods_progress.is_none() {
+        state.mods_progress = states.borrow().mods_progress.clone();
     }
     states.send_replace(state);
 }
@@ -912,6 +1119,7 @@ fn publish_client_config(states: &watch::Sender<LauncherState>, config: ClientCo
     let mut state = states.borrow().clone();
     state.client_config = Some(config);
     state.failure = None;
+    state.diagnostic = None;
     states.send_replace(state);
 }
 
@@ -922,7 +1130,7 @@ mod tests {
         io::Write,
         pin::Pin,
         sync::{
-            Arc,
+            Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
     };
@@ -1207,6 +1415,8 @@ mod tests {
         let game = LauncherGameConfig::new(
             build_http_client()?,
             VanillaLaunchConfig {
+                heap_memory: None,
+                jvm_args: Vec::new(),
                 version_id: "startup".to_owned(),
                 java_major_override: None,
                 server_address: None,
@@ -1238,6 +1448,12 @@ mod tests {
             state.failure(),
             Some(&LauncherFailure::UnsupportedLoader("quilt".to_owned()))
         );
+        let mods = state
+            .mods_progress()
+            .expect("mods status reaches launcher snapshots");
+        assert_eq!(mods.stage, ModsSyncStage::Complete);
+        assert_eq!(mods.files_completed, 1);
+        assert_eq!(mods.files_total, Some(1));
         assert_eq!(
             state.client_config().map(|config| config.version.as_str()),
             Some("1.21.1")
@@ -1269,6 +1485,7 @@ mod tests {
 
     struct SyntheticNeoForgeLauncher {
         calls: Arc<AtomicUsize>,
+        heaps: Arc<Mutex<Vec<HeapMemory>>>,
     }
 
     impl NeoForgeLauncher for SyntheticNeoForgeLauncher {
@@ -1287,12 +1504,14 @@ mod tests {
             >,
         > {
             self.calls.fetch_add(1, Ordering::AcqRel);
+            self.heaps
+                .lock()
+                .unwrap()
+                .push(HeapMemory::new(config.min_memory, config.max_memory).unwrap());
             Box::pin(async move {
                 assert_eq!(config.minecraft_version, "1.21.1");
                 assert_eq!(config.loader_version, "21.1.248");
                 assert_eq!(config.java_major, 21);
-                assert_eq!(config.min_memory, 2048);
-                assert_eq!(config.max_memory, 4096);
                 assert_eq!(config.jvm_args, ["-Dfile.encoding=UTF-8"]);
                 assert_eq!(
                     config.vanilla.server_address.as_deref(),
@@ -1357,7 +1576,10 @@ mod tests {
         );
         let backend = LauncherBackendConfig::new(server.url("")?)?;
         let calls = Arc::new(AtomicUsize::new(0));
+        let heaps = Arc::new(Mutex::new(Vec::new()));
         let vanilla = VanillaLaunchConfig {
+            heap_memory: None,
+            jvm_args: Vec::new(),
             version_id: "startup".to_owned(),
             java_major_override: None,
             server_address: None,
@@ -1373,6 +1595,7 @@ mod tests {
             vanilla,
             Arc::new(SyntheticNeoForgeLauncher {
                 calls: Arc::clone(&calls),
+                heaps: Arc::clone(&heaps),
             }),
         );
         let core = LauncherCore::new_backend_with_game(
@@ -1383,9 +1606,17 @@ mod tests {
             game,
         );
         core.set_offline_profile(OfflineProfile::new("NeoPlayer")?);
+        core.set_launch_options(UserLaunchOptions {
+            max_memory_mib: Some(6144),
+        });
         let mut states = core.subscribe_state();
 
         core.send_command(LauncherCommand::Play).await?;
+        wait_for_status(&mut states, LauncherStatus::Checking).await;
+        // A change while the workflow is running belongs to the following Play.
+        core.set_launch_options(UserLaunchOptions {
+            max_memory_mib: Some(1536),
+        });
         tokio::time::timeout(
             Duration::from_secs(5),
             wait_for_status(&mut states, LauncherStatus::Running),
@@ -1397,7 +1628,28 @@ mod tests {
         )
         .await?;
 
-        assert_eq!(calls.load(Ordering::Acquire), 1);
+        server.route("/api/client-config", TestResponse::ok(serde_json::json!({
+            "version":"1.21.1", "loader":"neoforge", "loaderVersion":"21.1.248", "javaVersion":21,
+            "minMemory":4096, "maxMemory":8192, "jvmArgs":["-Dfile.encoding=UTF-8"], "servers":[],
+            "modsHash":"backend-hash", "modsURL":server.url("mods.zip")?.as_str(), "serverIP":"server.example:25565"
+        }).to_string()));
+        core.send_command(LauncherCommand::Play).await?;
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            wait_for_status(&mut states, LauncherStatus::Running),
+        )
+        .await?;
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            wait_for_status(&mut states, LauncherStatus::Ready),
+        )
+        .await?;
+        assert_eq!(
+            *heaps.lock().unwrap(),
+            [HeapMemory::new(2048, 6144)?, HeapMemory::new(1536, 1536)?]
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 2);
+        assert_eq!(server.request_count("/api/client-config"), 2);
         assert_eq!(server.request_count("/mods.zip"), 0);
         assert_eq!(
             fs::read(installation.path().join("mods/existing.jar"))?,

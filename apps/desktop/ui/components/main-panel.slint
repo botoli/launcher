@@ -9,8 +9,11 @@ export component MainPanel inherits Rectangle {
     in property <string> server-address;
     in property <bool> server-online;
     in property <int> ping-ms;
+    in property <string> server-status;
+    in property <int> server-signal;
     in property <bool> loading;
     in property <bool> play-enabled: true;
+    in property <string> play-label: "Играть";
 
     callback play-clicked();
 
@@ -51,7 +54,7 @@ export component MainPanel inherits Rectangle {
         y: parent.height * 0.5;
         width: 80%;
         height: 18%;
-        spacing: parent.width * 0.15;
+        spacing: parent.width * 0.06;
 
         InfoCard {
             horizontal-stretch: 1;
@@ -64,25 +67,31 @@ export component MainPanel inherits Rectangle {
 
         InfoCard {
             horizontal-stretch: 1;
-            icon: AssetCatalog.server-icon;
-            label: root.server-online ? "Сервер онлайн" : "Сервер оффлайн";
+            icon: root.server-signal == 3 ? AssetCatalog.server-icon
+                : root.server-signal == 2 ? AssetCatalog.server-fair-icon
+                : root.server-signal == 1 ? AssetCatalog.server-poor-icon
+                : AssetCatalog.server-unavailable-icon;
+            label: root.server-status;
             value: root.server-address;
-            detail: root.server-online ? root.ping-ms + " ms" : "--";
+            detail: root.server-online && root.ping-ms >= 0 ? root.ping-ms + " ms" : "—";
             healthy: root.server-online;
+            detail-color: root.server-signal == 3 ? Palette.leaf
+                : root.server-signal == 2 ? #e8bf50
+                : root.server-signal == 1 ? #ef9278 : Palette.muted;
             asset-backed: true;
         }
     }
 
     PixelButton {
-        x: parent.width * 0.24;
-        y: parent.height * 0.73;
+        x: parent.width * 0.23;
+        y: parent.height * 0.72;
         border-radius: 10px;
-        width: 52%;
-        height: 21%;
+        width: 54%;
+        height: 24%;
         primary: true;
         asset-backed: true;
         button-enabled: root.play-enabled;
-        label: root.loading ? "Загрузка..." : "Играть";
+        label: root.play-label;
 
         clicked => {
             if (!root.loading && root.play-enabled) {

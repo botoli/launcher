@@ -1,49 +1,65 @@
 import { AssetCatalog } from "../theme/assets.slint";
 import { Palette } from "../theme/palette.slint";
+import { PixelButton } from "pixel-button.slint";
 
 export component ProgressPanel inherits Rectangle {
     in property <string> status-text;
     in property <string> detail-text;
+    in property <string> metrics-text;
     in property <float> progress;
     in property <int> progress-percent;
     in property <bool> has-progress;
+    in property <bool> show-diagnostics;
+    callback diagnostics-clicked();
 
     background: #061727f2;
     border-width: 2px;
     border-color: #31546a;
     border-radius: 2px;
 
-    HorizontalLayout {
+    VerticalLayout {
         padding: 8px;
-        spacing: 12px;
+        spacing: 6px;
 
-        Image {
-            width: 46px;
-            height: 46px;
-            source: AssetCatalog.progress-icon;
-            image-fit: contain;
-        }
-
-        VerticalLayout {
-            width: 190px;
-            spacing: 0px;
+        HorizontalLayout {
+            height: 24px;
+            spacing: 12px;
+            Image { width: 24px; height: 24px; source: AssetCatalog.progress-icon; image-fit: contain; }
 
             Text {
+                horizontal-stretch: 1;
                 text: root.status-text;
                 color: Palette.frost;
-                font-size: 14px;
+                font-size: 15px;
                 font-weight: 700;
-                vertical-alignment: bottom;
+                vertical-alignment: center;
+                overflow: elide;
             }
 
             Text {
-                text: root.detail-text;
+                horizontal-stretch: 1;
+                max-width: 660px;
+                text: root.metrics-text;
                 color: Palette.muted;
-                font-size: 11px;
-                vertical-alignment: top;
+                font-size: 12px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                overflow: elide;
             }
         }
 
+        Text {
+            height: 22px;
+            text: root.detail-text;
+            color: Palette.frost;
+            font-size: 13px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        HorizontalLayout {
+        height: 28px;
+        spacing: 12px;
         progress-track := Rectangle {
             horizontal-stretch: 1;
             height: 22px;
@@ -77,6 +93,12 @@ export component ProgressPanel inherits Rectangle {
             font-weight: 700;
             horizontal-alignment: center;
             vertical-alignment: center;
+        }
+        if root.show-diagnostics: PixelButton {
+            width: 112px;
+            label: "Логи";
+            clicked => { root.diagnostics-clicked(); }
+        }
         }
     }
 }
