@@ -742,6 +742,35 @@ async fn run_backend_play_workflow(
     backend: &BackendInstallation,
     options: UserLaunchOptions,
 ) -> WorkflowControl {
+    if let Some(gate) = installation
+        .game
+        .as_ref()
+        .and_then(|g| g.vanilla.telegram_auth.as_ref())
+    {
+        match gate.verify().await {
+            Ok(user) => {
+                if offline_profiles
+                    .borrow()
+                    .as_ref()
+                    .map(OfflineProfile::username)
+                    != Some(user.nickname.as_str())
+                {
+                    publish_state(
+                        states,
+                        LauncherState::new(LauncherStatus::AuthenticationRequired, None),
+                    );
+                    return WorkflowControl::Continue;
+                }
+            }
+            Err(_) => {
+                publish_state(
+                    states,
+                    LauncherState::new(LauncherStatus::AuthenticationRequired, None),
+                );
+                return WorkflowControl::Continue;
+            }
+        }
+    }
     let config = match fetch_client_config_or_receive_control(commands, backend).await {
         ClientConfigStep::Finished(result) => match *result {
             Ok(config) => config,
@@ -1415,6 +1444,7 @@ mod tests {
         let game = LauncherGameConfig::new(
             build_http_client()?,
             VanillaLaunchConfig {
+                telegram_auth: None,
                 heap_memory: None,
                 jvm_args: Vec::new(),
                 version_id: "startup".to_owned(),
@@ -1578,6 +1608,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let heaps = Arc::new(Mutex::new(Vec::new()));
         let vanilla = VanillaLaunchConfig {
+            telegram_auth: None,
             heap_memory: None,
             jvm_args: Vec::new(),
             version_id: "startup".to_owned(),

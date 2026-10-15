@@ -22,6 +22,7 @@ use super::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VanillaLaunchConfig {
+    pub telegram_auth: Option<crate::auth::telegram::TelegramAuthGate>,
     pub heap_memory: Option<crate::HeapMemory>,
     pub jvm_args: Vec<String>,
     pub version_id: String,
@@ -71,6 +72,7 @@ impl VanillaLaunchCancellation {
 
 #[derive(Debug)]
 pub enum VanillaLaunchError {
+    Authentication(crate::auth::telegram::TelegramAuthError),
     Cancelled,
     Memory(crate::InvalidHeapMemory),
     VersionCatalog(VersionCatalogError),
@@ -96,6 +98,7 @@ pub enum VanillaLaunchError {
 impl fmt::Display for VanillaLaunchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Authentication(source) => write!(formatter, "{source}"),
             Self::Cancelled => formatter.write_str("vanilla launch was cancelled"),
             Self::Memory(source) => write!(formatter, "invalid heap settings: {source}"),
             Self::VersionCatalog(source) => {
@@ -141,6 +144,7 @@ impl fmt::Display for VanillaLaunchError {
 impl Error for VanillaLaunchError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Authentication(source) => Some(source),
             Self::Memory(source) => Some(source),
             Self::VersionCatalog(source) => Some(source),
             Self::VersionResolve(source) => Some(source),
@@ -331,6 +335,17 @@ where
 
     tracing::info!("launching");
     report(&on_progress, VanillaLaunchStage::Launching, None);
+    ensure_not_cancelled(cancellation)?;
+    if let Some(gate) = &config.telegram_auth {
+        let user = cancellable(cancellation, gate.verify())
+            .await?
+            .map_err(VanillaLaunchError::Authentication)?;
+        if user.nickname != identity.username() {
+            return Err(VanillaLaunchError::Authentication(
+                crate::auth::telegram::TelegramAuthError::Unauthorized,
+            ));
+        }
+    }
     ensure_not_cancelled(cancellation)?;
     process_launcher(launch_spec).map_err(VanillaLaunchError::Process)
 }
@@ -1115,6 +1130,7 @@ pub(crate) mod tests {
 
     fn config_for_paths(runtime_root: PathBuf, game_directory: PathBuf) -> VanillaLaunchConfig {
         VanillaLaunchConfig {
+            telegram_auth: None,
             heap_memory: None,
             jvm_args: Vec::new(),
             version_id: VERSION_ID.to_owned(),

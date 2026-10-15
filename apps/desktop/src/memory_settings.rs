@@ -448,6 +448,7 @@ mod tests {
         let mut controller = MemorySettingsController::new(settings.clone(), core, &config);
         Rc::get_mut(&mut controller).unwrap().query_memory = eight_gib;
         let window = AppWindow::new().unwrap();
+        window.set_auth_verified(true);
         let diagnostics =
             crate::diagnostics::DiagnosticsController::new(runtime.handle().clone(), root.path());
         diagnostics.bind(&window);
@@ -460,6 +461,13 @@ mod tests {
         );
         controller.bind(&window);
         window.show().unwrap();
+        window.set_auth_visible(true);
+        window.set_auth_message("Код запроса: A1B2C3\nОткройте бота и подтвердите вход с этим кодом. Ссылка действует 5 минут.".into());
+        window.set_auth_link("https://t.me/TestAuthBot?start=test".into());
+        window.set_auth_busy(true);
+        render(&window, &adapter, "telegram-login");
+        window.set_auth_visible(false);
+        window.set_auth_busy(false);
         render(&window, &adapter, "main-initial");
         // Render every connection icon and verify that failed probes clear the old ping.
         for (ping_ms, signal, preview) in [
@@ -616,6 +624,22 @@ mod tests {
         controller.bind(&window);
         window.set_settings_visible(false);
         crate::apply_launcher_state(&window, &controller.core.subscribe_state().borrow());
+        let gate = launcher_core::auth::telegram::TelegramAuthGate::new(
+            launcher_core::auth::telegram::TelegramAuthClient::new(
+                launcher_core::build_http_client().unwrap(),
+                "http://127.0.0.1".parse().unwrap(),
+            ),
+        );
+        gate.set_session(Some(launcher_core::auth::telegram::TelegramSession {
+            token: "test-only-session".into(),
+            expires_at: 9999999999999,
+            user: launcher_core::auth::telegram::TelegramUser {
+                login: "tg_test".into(),
+                nickname: "TestPlayer".into(),
+                registration_status: "pending".into(),
+            },
+        }));
+        window.set_auth_verified(true);
         crate::bind_play_command(
             &window,
             controller.core.clone(),
@@ -623,7 +647,17 @@ mod tests {
             controller.settings.clone(),
             controller.clone(),
             diagnostics.clone(),
+            gate,
         );
+        window.set_auth_verified(false);
+        window.invoke_play_requested("OtherPlayer".into());
+        assert!(window.get_auth_visible());
+        assert!(
+            !window.get_loading(),
+            "Play must refuse an unauthenticated user"
+        );
+        window.set_auth_visible(false);
+        window.set_auth_verified(true);
         crate::listen_for_state_updates(
             &window,
             controller.core.subscribe_state(),

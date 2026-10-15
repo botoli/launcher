@@ -8,6 +8,8 @@ mod platform;
 mod server_monitor;
 mod settings;
 mod system_memory;
+mod telegram_login;
+mod telegram_session;
 
 use std::{process::ExitCode, rc::Rc};
 
@@ -15,8 +17,8 @@ use app_config::{AppConfigError, DesktopAppConfig};
 use diagnostics::DiagnosticsController;
 use launcher_core::{
     ClientConfig, ClientConfigFetchError, HttpClientBuildError, LauncherCommand, LauncherCore,
-    LauncherFailure, LauncherGameConfig, LauncherState, LauncherStatus, OfflineProfile,
-    OfflineProfileError, VanillaLaunchConfig, build_http_client, fetch_client_config,
+    LauncherFailure, LauncherGameConfig, LauncherState, LauncherStatus, OfflineProfileError,
+    VanillaLaunchConfig, build_http_client, fetch_client_config,
 };
 use launcher_core::{LauncherDiagnostic, LauncherStage};
 use launcher_core::{ModsSyncProgress, ModsSyncStage};
@@ -106,10 +108,11 @@ impl DesktopDisplayState {
 
 struct ConfiguredLauncher {
     core: LauncherCore,
-    profile: Option<OfflineProfile>,
     profile_controller: ProfileController,
     display: DesktopDisplayState,
     client_config: ClientConfig,
+    telegram_gate: launcher_core::auth::telegram::TelegramAuthGate,
+    session_store: telegram_session::SessionStore,
 }
 
 fn main() -> ExitCode {
@@ -163,7 +166,7 @@ fn run() -> Result<(), DesktopError> {
     match runtime.block_on(configure_launcher(runtime.handle(), app_config)) {
         Ok(configured) => {
             apply_static_display_state(&window, &configured.display);
-            apply_initial_profile(&window, &configured.core, configured.profile.as_ref());
+            // A saved offline nickname is not proof of ownership of a Telegram account.
             let server_monitor = ServerMonitor::start(
                 &window,
                 runtime.handle(),
@@ -182,6 +185,14 @@ fn run() -> Result<(), DesktopError> {
             );
             memory_controller.bind(&window);
 
+            let telegram = telegram_login::TelegramLogin::bind(
+                &window,
+                runtime.handle().clone(),
+                configured.telegram_gate,
+                configured.core.clone(),
+                configured.session_store,
+            );
+
             bind_play_command(
                 &window,
                 configured.core.clone(),
@@ -189,6 +200,7 @@ fn run() -> Result<(), DesktopError> {
                 profile_controller,
                 memory_controller.clone(),
                 diagnostics.clone(),
+                telegram.gate.clone(),
             );
             listen_for_state_updates(
                 &window,
@@ -241,18 +253,32 @@ async fn configure_launcher(
     runtime: &Handle,
     config: DesktopAppConfig,
 ) -> Result<ConfiguredLauncher, DesktopConfigError> {
-    let (profile_controller, profile) =
+    let (profile_controller, _profile) =
         ProfileController::load(SettingsStore::new(config.paths.settings_file()));
     let client = build_http_client().map_err(|source| DesktopConfigError::HttpClient { source })?;
     let client_config = fetch_client_config(&client, config.backend.client_config_url())
         .await
         .map_err(|source| DesktopConfigError::ClientConfig { source })?;
-    let vanilla = vanilla_launch_config(
+    let mut vanilla = vanilla_launch_config(
         config.paths.game(),
         client_config.version.clone(),
         Some(client_config.java_version),
         client_config.server_address().map(str::to_owned),
     )?;
+    let telegram_gate = launcher_core::auth::telegram::TelegramAuthGate::new(
+        launcher_core::auth::telegram::TelegramAuthClient::new(
+            client.clone(),
+            config.backend.server_url().clone(),
+        ),
+    );
+    let session_store = telegram_session::SessionStore::new(
+        config
+            .paths
+            .settings_file()
+            .with_file_name("telegram-session.dat"),
+        config.backend.server_url().to_string(),
+    );
+    vanilla.telegram_auth = Some(telegram_gate.clone());
     let game = LauncherGameConfig::new(client.clone(), vanilla);
     let core = LauncherCore::new_backend_with_game(
         runtime,
@@ -263,10 +289,11 @@ async fn configure_launcher(
     );
     Ok(ConfiguredLauncher {
         core,
-        profile,
         profile_controller,
         display: DesktopDisplayState::from_client_config(&client_config),
         client_config,
+        telegram_gate,
+        session_store,
     })
 }
 
@@ -277,6 +304,7 @@ fn vanilla_launch_config(
     server_address: Option<String>,
 ) -> Result<VanillaLaunchConfig, DesktopConfigError> {
     Ok(VanillaLaunchConfig {
+        telegram_auth: None,
         heap_memory: None,
         jvm_args: Vec::new(),
         version_id,
@@ -314,21 +342,13 @@ fn apply_static_display_state(window: &AppWindow, state: &DesktopDisplayState) {
     );
 }
 
-fn apply_initial_profile(
-    window: &AppWindow,
-    core: &LauncherCore,
-    profile: Option<&OfflineProfile>,
-) {
-    let Some(profile) = profile else {
-        return;
-    };
-
-    core.set_offline_profile(profile.clone());
-    window.set_nickname_input(profile.username().into());
-    tracing::info!("profile configured");
-}
-
 fn apply_launcher_state(window: &AppWindow, state: &LauncherState) {
+    if state.status() == LauncherStatus::AuthenticationRequired {
+        window.set_auth_verified(false);
+        window.set_auth_visible(true);
+        window
+            .set_auth_message("Не удалось проверить доступ. Повторите вход через Telegram.".into());
+    }
     if let Some(config) = state.client_config() {
         apply_client_config(window, config);
     }
@@ -724,19 +744,27 @@ fn bind_play_command(
     profile_controller: Rc<ProfileController>,
     memory_controller: Rc<MemorySettingsController>,
     diagnostics: Rc<DiagnosticsController>,
+    telegram: launcher_core::auth::telegram::TelegramAuthGate,
 ) {
     let window_weak = window.as_weak();
-    window.on_play_requested(move |nickname| {
+    window.on_play_requested(move |_nickname| {
         let Some(window) = window_weak.upgrade() else {
             return;
         };
         if window.get_loading() || !window.get_play_enabled() {
             return;
         }
+        if !window.get_auth_verified() || telegram.session().is_none() {
+            window.set_auth_visible(true);
+            return;
+        }
         if !memory_controller.prepare_play(&window) {
             return;
         }
-        let profile = match profile_controller.accept_username(nickname.to_string()) {
+        let Some(session) = telegram.session() else {
+            return;
+        };
+        let profile = match profile_controller.accept_username(session.user.nickname) {
             Ok(profile) => profile,
             Err(error) => {
                 if let Some(window) = window_weak.upgrade() {
@@ -838,6 +866,7 @@ fn listen_for_state_updates(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use launcher_core::OfflineProfile;
 
     #[test]
     fn display_state_uses_client_version_and_server() {

@@ -5,6 +5,14 @@ Equestrian Dream Launcher 0.1.0
 2. Установите 64-битную Java 21, если она ещё не установлена.
 3. Запустите EquestrianDreamLauncher.exe.
 
+Вход через Telegram
+Нажмите «Войти через Telegram», затем «Открыть бота». При первом входе выберите
+свободный игровой ник в боте и подтвердите код, совпадающий с кодом в лаунчере.
+После подтверждения доступна кнопка «Играть». Все статусы кроме banned допускают вход.
+Сессия сохраняется на 30 дней с шифрованием Windows DPAPI текущего пользователя.
+Кнопка «Выйти» удаляет локальную сессию и отзывает её на сервере.
+Бот и backend настраиваются владельцем проекта; серверные секреты в EXE не входят.
+
 Java
 Launcher не загружает Java автоматически. Для текущей Minecraft-сборки требуется
 Java 21 x64 (JRE или JDK). Рекомендуется JDK 21 x64. Launcher ищет Java через
@@ -62,8 +70,9 @@ Minecraft: %LOCALAPPDATA%\EquestrianDreamLauncher\game
 %LOCALAPPDATA%\EquestrianDreamLauncher\logs\launcher.log
 
 Backend
-Production backend http://89.125.214.122:3000 уже встроен в launcher.
-Обязательные переменные окружения отсутствуют.
+Production backend http://104.143.218.8:3000 уже встроен в launcher.
+Для Telegram-входа владелец задаёт адрес настроенного backend через LAUNCHER_SERVER_URL.
+Для боевого использования нужен HTTPS URL. Бот запускается отдельно от лаунчера.
 
 Примечание
 Launcher распространяется без installer и цифровой подписи. Windows SmartScreen

@@ -5,6 +5,7 @@ export component TitleBar inherits Rectangle {
     in-out property <string> nickname;
     in property <string> nickname-error;
     in property <bool> nickname-enabled: true;
+    in property <bool> nickname-editable: true;
 
     callback minimize-clicked();
     callback close-clicked();
@@ -60,6 +61,7 @@ export component TitleBar inherits Rectangle {
 
                 TextInput {
                     enabled: root.nickname-enabled;
+                    read-only: !root.nickname-editable;
                     x: 7px;
                     y: 2px;
                     width: parent.width - 14px;
@@ -76,7 +78,7 @@ export component TitleBar inherits Rectangle {
                 y: 30px;
                 width: parent.width;
                 height: 14px;
-                text: root.nickname-error == "" ? "Ник · 3–16 символов" : root.nickname-error;
+                text: root.nickname-error == "" ? (root.nickname-editable ? "Ник · 3–16 символов" : "Аккаунт Telegram") : root.nickname-error;
                 color: root.nickname-error == "" ? Palette.muted : #ef9d84;
                 font-family: "Consolas";
                 font-size: 10px;

@@ -1,6 +1,7 @@
 mod microsoft;
 mod minecraft;
 mod session;
+pub mod telegram;
 mod xbox;
 
 use std::{

@@ -46,6 +46,15 @@ export component AppWindow inherits Window {
     in property <string> diagnostics-summary;
     in property <string> diagnostics-text;
     in property <string> launcher-log-path;
+    in property <bool> auth-verified;
+    in-out property <bool> auth-visible;
+    in property <bool> auth-busy;
+    in property <string> auth-message;
+    in property <string> auth-link;
+    callback auth-requested();
+    callback auth-cancelled();
+    callback auth-open-requested();
+    callback auth-logout-requested();
 
     callback play-requested(string);
     callback settings-requested();
@@ -96,7 +105,8 @@ export component AppWindow inherits Window {
             height: 60px;
             nickname <=> root.nickname-input;
             nickname-error: root.nickname-error;
-            nickname-enabled: !root.loading;
+            nickname-enabled: !root.loading && !root.auth-visible;
+            nickname-editable: false;
 
             minimize-clicked => {
                 root.minimized = true;
@@ -130,7 +140,7 @@ export component AppWindow inherits Window {
                 server-status: root.server-status;
                 server-signal: root.server-signal;
                 loading: root.loading;
-                play-enabled: root.play-enabled && root.memory-ready;
+                play-enabled: root.play-enabled && root.memory-ready && root.auth-verified;
                 play-label: root.play-label;
 
                 play-clicked => {
@@ -148,7 +158,7 @@ export component AppWindow inherits Window {
                 PixelButton {
                     horizontal-stretch: 1;
                     label: "Настройки";
-                    button-enabled: !root.loading;
+                    button-enabled: !root.loading && !root.auth-visible;
                     icon: AssetCatalog.settings-icon;
                     show-icon: true;
                     surface-image: AssetCatalog.settings-surface;
@@ -162,7 +172,7 @@ export component AppWindow inherits Window {
                 PixelButton {
                     horizontal-stretch: 1;
                     label: "Моды";
-                    button-enabled: !root.loading;
+                    button-enabled: !root.loading && !root.auth-visible;
                     icon: AssetCatalog.mods-icon;
                     show-icon: true;
 
@@ -243,6 +253,40 @@ export component AppWindow inherits Window {
                 close-requested => { root.diagnostics-close-requested(); }
                 refresh-requested => { root.diagnostics-refresh-requested(); }
                 open-folder-requested => { root.logs-folder-requested(); }
+            }
+        }
+    }
+
+    if root.auth-verified && !root.auth-visible: PixelButton {
+        x: 800px; y: 12px; width: 112px; height: 36px;
+        label: "Выйти";
+        button-enabled: !root.loading;
+        clicked => { root.auth-logout-requested(); }
+    }
+    if root.auth-visible: Rectangle {
+        x: 0px; y: 60px; width: parent.width; height: parent.height - 60px;
+        background: #020a12dd;
+        TouchArea { }
+        Rectangle {
+            width: 680px; height: 430px;
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            background: Palette.panel; border-color: Palette.bronze; border-width: 3px;
+            link-copy := TextInput { text: root.auth-link; visible: false; read-only: true; }
+            VerticalLayout {
+                padding: 32px; spacing: 18px;
+                Text { text: "Вход через Telegram"; color: Palette.frost; font-size: 28px; font-weight: 700; }
+                Text { text: root.auth-message; color: Palette.frost; font-size: 18px; wrap: word-wrap; vertical-stretch: 1; }
+                PixelButton {
+                    height: 52px; label: "Войти через Telegram"; primary: true;
+                    button-enabled: !root.auth-busy;
+                    clicked => { root.auth-requested(); }
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    PixelButton { height: 48px; label: "Открыть бота"; button-enabled: root.auth-link != ""; clicked => { root.auth-open-requested(); } }
+                    PixelButton { height: 48px; label: "Копировать ссылку"; button-enabled: root.auth-link != ""; clicked => { link-copy.select-all(); link-copy.copy(); } }
+                }
+                PixelButton { height: 42px; label: "Отменить вход"; button-enabled: root.auth-busy || root.auth-link != ""; clicked => { root.auth-cancelled(); } }
             }
         }
     }

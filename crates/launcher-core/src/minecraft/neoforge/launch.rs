@@ -209,6 +209,17 @@ where
         loader_version = %config.loader_version,
         "launching NeoForge"
     );
+    if let Some(gate) = &config.vanilla.telegram_auth {
+        let user = cancellable(cancellation, gate.verify())
+            .await?
+            .map_err(NeoForgeLaunchError::Authentication)?;
+        if user.nickname != identity.username() {
+            return Err(NeoForgeLaunchError::Authentication(
+                crate::auth::telegram::TelegramAuthError::Unauthorized,
+            ));
+        }
+    }
+    ensure_not_cancelled(cancellation)?;
     let mut process = launch_process(spec).map_err(NeoForgeLaunchError::Process)?;
     if cancellation.is_cancelled() {
         process.cancel();
@@ -367,6 +378,8 @@ fn map_installer_error(error: NeoForgeInstallerError) -> NeoForgeLaunchError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum NeoForgeLaunchError {
+    #[error("{0}")]
+    Authentication(crate::auth::telegram::TelegramAuthError),
     #[error("NeoForge launch was cancelled")]
     Cancelled,
     #[error("failed to fetch Minecraft version catalog: {0}")]

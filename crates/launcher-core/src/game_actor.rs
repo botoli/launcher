@@ -918,6 +918,7 @@ mod tests {
             precondition_met: Arc::clone(&precondition_met),
         };
         let vanilla = VanillaLaunchConfig {
+            telegram_auth: None,
             heap_memory: None,
             jvm_args: Vec::new(),
             version_id: "synthetic".to_owned(),

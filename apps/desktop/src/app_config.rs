@@ -8,7 +8,7 @@ use std::{
 use launcher_core::{LauncherBackendConfig, LauncherBackendConfigError};
 use thiserror::Error;
 
-pub const PRODUCTION_BACKEND_URL: &str = "http://89.125.214.122:3000";
+pub const PRODUCTION_BACKEND_URL: &str = "http://104.143.218.8:3000";
 
 const APPLICATION_DIRECTORY: &str = "EquestrianDreamLauncher";
 const SERVER_URL_ENV: &str = "LAUNCHER_SERVER_URL";
@@ -172,14 +172,14 @@ mod tests {
     fn uses_production_backend_by_default() {
         let config = DesktopAppConfig::resolve(values()).unwrap();
 
-        assert_eq!(PRODUCTION_BACKEND_URL, "http://89.125.214.122:3000");
+        assert_eq!(PRODUCTION_BACKEND_URL, "http://104.143.218.8:3000");
         assert_eq!(
             config.backend.server_url().as_str(),
-            "http://89.125.214.122:3000/"
+            "http://104.143.218.8:3000/"
         );
         assert_eq!(
             config.backend.client_config_url().as_str(),
-            "http://89.125.214.122:3000/api/client-config"
+            "http://104.143.218.8:3000/api/client-config"
         );
     }
 
