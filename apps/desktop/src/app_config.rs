@@ -6,9 +6,36 @@ use std::{
 };
 
 use launcher_core::{LauncherBackendConfig, LauncherBackendConfigError};
+use serde::Deserialize;
 use thiserror::Error;
 
-pub const PRODUCTION_BACKEND_URL: &str = "http://104.143.218.8:3000";
+const CONFIG_FILE: &str = "launcher-config.json";
+const DEFAULT_CONFIG: &str = include_str!("../../../launcher-config.json");
+
+#[derive(Deserialize)]
+struct FileConfig {
+    server_url: String,
+}
+
+fn read_server_url(path: &Path) -> Result<String, AppConfigError> {
+    let json = match fs::read_to_string(path) {
+        Ok(json) => json,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => DEFAULT_CONFIG.to_owned(),
+        Err(source) => {
+            return Err(AppConfigError::ReadConfig {
+                path: path.to_owned(),
+                source,
+            });
+        }
+    };
+    parse_server_url(&json)
+}
+
+fn parse_server_url(json: &str) -> Result<String, AppConfigError> {
+    serde_json::from_str::<FileConfig>(json)
+        .map(|config| config.server_url)
+        .map_err(AppConfigError::InvalidConfig)
+}
 
 const APPLICATION_DIRECTORY: &str = "EquestrianDreamLauncher";
 const SERVER_URL_ENV: &str = "LAUNCHER_SERVER_URL";
@@ -77,23 +104,40 @@ pub struct DesktopAppConfig {
 
 impl DesktopAppConfig {
     pub fn load() -> Result<Self, AppConfigError> {
-        Self::resolve(EnvironmentValues::from_process()?)
+        let mut values = EnvironmentValues::from_process()?;
+        if values.server_url.is_none() {
+            let executable = env::current_exe().map_err(AppConfigError::ExecutablePath)?;
+            let path = executable.with_file_name(CONFIG_FILE);
+            values.server_url = Some(read_server_url(&path)?);
+        }
+        Self::resolve(values)
     }
 
     fn resolve(values: EnvironmentValues) -> Result<Self, AppConfigError> {
-        let server_url = values
-            .server_url
-            .as_deref()
-            .unwrap_or(PRODUCTION_BACKEND_URL);
+        let default_url = parse_server_url(DEFAULT_CONFIG)?;
+        let server_url = values.server_url.as_deref().unwrap_or(&default_url).trim();
         if server_url.trim().is_empty() {
             return Err(AppConfigError::EmptyVariable {
                 name: SERVER_URL_ENV,
             });
         }
-        let server_url = server_url.parse().map_err(|_| AppConfigError::InvalidUrl {
-            name: SERVER_URL_ENV,
-        })?;
-        let backend = LauncherBackendConfig::new(server_url)
+        let server_url = match server_url.trim_end_matches('/') {
+            "http://87.58.220.248:3000" => &default_url,
+            _ => server_url,
+        };
+        let mut backend = LauncherBackendConfig::new(server_url.parse().map_err(|_| {
+            AppConfigError::InvalidUrl {
+                name: SERVER_URL_ENV,
+            }
+        })?)
+        .map_err(|source| AppConfigError::InvalidBackend { source })?;
+        // All services and session storage use the same origin, even when the
+        // configured address includes /api/client-config or a trailing slash.
+        let mut origin = backend.server_url().clone();
+        origin.set_path("/");
+        origin.set_query(None);
+        origin.set_fragment(None);
+        backend = LauncherBackendConfig::new(origin)
             .map_err(|source| AppConfigError::InvalidBackend { source })?;
         let paths = ApplicationPaths::resolve(&values)?;
 
@@ -135,13 +179,23 @@ fn required_path(value: &OsStr, name: &'static str) -> Result<PathBuf, AppConfig
 
 #[derive(Debug, Error)]
 pub enum AppConfigError {
+    #[error("failed to locate launcher executable: {0}")]
+    ExecutablePath(std::io::Error),
+    #[error("failed to read configuration {path}: {source}")]
+    ReadConfig {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("invalid launcher-config.json (expected server_url string): {0}")]
+    InvalidConfig(#[source] serde_json::Error),
     #[error("environment variable {name} is missing")]
     MissingVariable { name: &'static str },
     #[error("environment variable {name} is not valid Unicode")]
     InvalidEnvironmentEncoding { name: &'static str },
-    #[error("environment variable {name} is empty")]
+    #[error("configuration value {name} is empty")]
     EmptyVariable { name: &'static str },
-    #[error("environment variable {name} is not a valid URL")]
+    #[error("configuration value {name} is not a valid URL")]
     InvalidUrl { name: &'static str },
     #[error("invalid launcher backend configuration: {source}")]
     InvalidBackend {
@@ -172,14 +226,24 @@ mod tests {
     fn uses_production_backend_by_default() {
         let config = DesktopAppConfig::resolve(values()).unwrap();
 
-        assert_eq!(PRODUCTION_BACKEND_URL, "http://104.143.218.8:3000");
         assert_eq!(
             config.backend.server_url().as_str(),
-            "http://104.143.218.8:3000/"
+            "https://launcher.nevermoreland.ru/"
         );
         assert_eq!(
             config.backend.client_config_url().as_str(),
-            "http://104.143.218.8:3000/api/client-config"
+            "https://launcher.nevermoreland.ru/api/client-config"
+        );
+    }
+
+    #[test]
+    fn legacy_production_override_uses_final_https_origin() {
+        let mut environment = values();
+        environment.server_url = Some("http://87.58.220.248:3000/".into());
+        let config = DesktopAppConfig::resolve(environment).unwrap();
+        assert_eq!(
+            config.backend.server_url().as_str(),
+            "https://launcher.nevermoreland.ru/"
         );
     }
 
@@ -194,6 +258,80 @@ mod tests {
             config.backend.client_config_url().as_str(),
             "http://127.0.0.1:3000/api/client-config"
         );
+    }
+
+    #[test]
+    fn accepts_ip_domain_and_full_endpoint_with_one_origin() {
+        for base in [
+            "https://89.125.214.122",
+            "https://launcher.nevermoreland.ru",
+        ] {
+            for suffix in [
+                "",
+                "/",
+                "/api/client-config",
+                "/api/client-config?source=test#fragment",
+            ] {
+                let mut environment = values();
+                environment.server_url = Some(format!(" {base}{suffix} "));
+                let config = DesktopAppConfig::resolve(environment).unwrap();
+                assert_eq!(config.backend.server_url().as_str(), format!("{base}/"));
+                assert_eq!(
+                    config.backend.client_config_url().as_str(),
+                    format!("{base}/api/client-config")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reads_external_config_and_falls_back_only_when_missing() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join(CONFIG_FILE);
+        assert_eq!(
+            read_server_url(&path).unwrap(),
+            parse_server_url(DEFAULT_CONFIG).unwrap()
+        );
+        fs::write(
+            &path,
+            r#"{"server_url":"https://custom.example/api/client-config"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_server_url(&path).unwrap(),
+            "https://custom.example/api/client-config"
+        );
+        for invalid in ["broken json", "{}", r#"{"server_url":42}"#] {
+            fs::write(&path, invalid).unwrap();
+            assert!(matches!(
+                read_server_url(&path),
+                Err(AppConfigError::InvalidConfig(_))
+            ));
+        }
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(matches!(
+            read_server_url(&path),
+            Err(AppConfigError::ReadConfig { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_invalid_and_non_http_server_urls() {
+        for url in [
+            "",
+            "  ",
+            "not a URL",
+            "file:///tmp/config",
+            "ftp://example.com",
+        ] {
+            let mut environment = values();
+            environment.server_url = Some(url.into());
+            assert!(
+                DesktopAppConfig::resolve(environment).is_err(),
+                "accepted {url:?}"
+            );
+        }
     }
 
     #[test]

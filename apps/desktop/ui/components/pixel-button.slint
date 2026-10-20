@@ -6,7 +6,9 @@ export component PixelButton inherits Rectangle {
     in property <image> surface-image;
     in property <bool> show-icon: false;
     in property <bool> show-surface: false;
+    in property <float> surface-opacity: 0.16;
     in property <bool> primary: false;
+    in property <length> label-font-size: root.primary ? 29px : 18px;
     in property <bool> asset-backed: false;
     in property <bool> button-enabled: true;
 
@@ -17,7 +19,7 @@ export component PixelButton inherits Rectangle {
     accessible-label: root.label;
 
     clip: true;
-    opacity: root.button-enabled ? 1 : 0.55;
+    opacity: root.button-enabled || (root.asset-backed && root.show-surface) ? 1 : 0.55;
     border-width: root.asset-backed ? 0px : root.primary ? 3px : 2px;
     border-color: keyboard.has-focus ? Palette.leaf : root.primary ? Palette.bronze : Palette.outline;
     border-radius: 2px;
@@ -33,12 +35,22 @@ export component PixelButton inherits Rectangle {
         width: parent.width;
         height: parent.height;
         source: root.surface-image;
-        image-fit: cover;
-        opacity: 0.16;
+        image-fit: root.asset-backed ? fill : cover;
+        image-rendering: root.asset-backed ? pixelated : smooth;
+        opacity: root.surface-opacity;
+    }
+
+    if root.show-surface && root.asset-backed: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-width: 3px;
+        border-color: keyboard.has-focus ? Palette.leaf : #382514;
+        background: !root.button-enabled ? #140a0380 : area.pressed ? #140a0366
+            : area.has-hover ? #ffffff18 : #120a0333;
     }
 
     Rectangle {
-        visible: !root.asset-backed;
+        visible: !root.asset-backed || root.show-surface;
         x: 4px;
         y: 4px;
         width: parent.width - 8px;
@@ -73,8 +85,9 @@ export component PixelButton inherits Rectangle {
 
         Text {
             text: root.label;
+            opacity: !root.button-enabled && root.asset-backed && root.show-surface ? 0.65 : 1;
             color: #fff9e9;
-            font-size: root.primary ? 29px : 18px;
+            font-size: root.label-font-size;
             font-weight: root.primary ? 600 : 500;
             letter-spacing: root.primary ? 2px : 0px;
             horizontal-alignment: center;

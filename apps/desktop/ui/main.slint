@@ -2,10 +2,11 @@ import { AssetCatalog } from "theme/assets.slint";
 import { Palette } from "theme/palette.slint";
 import { TitleBar } from "components/title-bar.slint";
 import { MainPanel } from "components/main-panel.slint";
-import { PixelButton } from "components/pixel-button.slint";
 import { ProgressPanel } from "components/progress-panel.slint";
 import { SettingsPanel } from "components/settings-panel.slint";
 import { DiagnosticsPanel } from "components/diagnostics-panel.slint";
+import { UpdatePanel } from "components/update-panel.slint";
+import { AuthPanel } from "components/auth-panel.slint";
 
 export component AppWindow inherits Window {
     in-out property <string> nickname-input;
@@ -25,7 +26,8 @@ export component AppWindow inherits Window {
     in property <bool> loading;
     in property <bool> play-enabled;
     in property <string> play-label: "Играть";
-    in property <float> horseshoe-angle;
+    in property <bool> preparing;
+    in-out property <bool> auth-play-pending;
     in-out property <bool> settings-visible;
     in-out property <string> memory-input;
     in property <int> memory-value;
@@ -51,14 +53,28 @@ export component AppWindow inherits Window {
     in property <bool> auth-busy;
     in property <string> auth-message;
     in property <string> auth-link;
+    in property <string> auth-code;
+    in property <bool> auth-error;
+    in-out property <int> auth-provider;
     callback auth-requested();
     callback auth-cancelled();
+    callback auth-back-requested();
     callback auth-open-requested();
     callback auth-logout-requested();
 
+    in property <bool> update-visible;
+    in property <bool> update-busy;
+    in property <bool> update-error;
+    in property <bool> update-can-cancel: true;
+    in property <string> update-current-version;
+    in property <string> update-version;
+    in property <string> update-message;
+    in property <float> update-progress;
+    callback update-install-requested();
+    callback update-dismiss-requested();
+
     callback play-requested(string);
     callback settings-requested();
-    callback mods-requested();
     callback move-window(float, float);
     callback memory-input-edited(string);
     callback memory-slider-changed(float);
@@ -105,8 +121,13 @@ export component AppWindow inherits Window {
             height: 60px;
             nickname <=> root.nickname-input;
             nickname-error: root.nickname-error;
-            nickname-enabled: !root.loading && !root.auth-visible;
+            nickname-enabled: !root.loading && !root.update-visible;
             nickname-editable: false;
+            auth-verified: root.auth-verified;
+            account-active: root.auth-visible;
+            account-clicked => { root.auth-visible = true; }
+            settings-enabled: !root.loading && !root.auth-visible && !root.update-visible;
+            settings-clicked => { root.settings-requested(); }
 
             minimize-clicked => {
                 root.minimized = true;
@@ -125,7 +146,7 @@ export component AppWindow inherits Window {
             vertical-stretch: 1;
             background: transparent;
 
-            if !root.settings-visible && !root.diagnostics-visible: main-view := Rectangle {
+            if !root.settings-visible && !root.diagnostics-visible && !root.auth-visible: main-view := Rectangle {
             background: transparent;
             panel := MainPanel {
                 width: parent.width * 0.70;
@@ -140,56 +161,28 @@ export component AppWindow inherits Window {
                 server-status: root.server-status;
                 server-signal: root.server-signal;
                 loading: root.loading;
-                play-enabled: root.play-enabled && root.memory-ready && root.auth-verified;
-                play-label: root.play-label;
+                play-enabled: root.play-enabled && root.memory-ready && !root.update-visible;
+                play-label: root.auth-verified ? root.play-label : "Войти и играть";
 
                 play-clicked => {
                     root.play-requested(root.nickname-input);
                 }
             }
 
-            actions := HorizontalLayout {
+            if root.preparing: Image {
                 x: (parent.width - self.width) / 2;
-                y: panel.y + panel.height + 12px;
-                width: panel.width;
-                height: 56px;
-                spacing: 64px;
-
-                PixelButton {
-                    horizontal-stretch: 1;
-                    label: "Настройки";
-                    button-enabled: !root.loading && !root.auth-visible;
-                    icon: AssetCatalog.settings-icon;
-                    show-icon: true;
-                    surface-image: AssetCatalog.settings-surface;
-                    show-surface: true;
-
-                    clicked => {
-                        root.settings-requested();
-                    }
-                }
-
-                PixelButton {
-                    horizontal-stretch: 1;
-                    label: "Моды";
-                    button-enabled: !root.loading && !root.auth-visible;
-                    icon: AssetCatalog.mods-icon;
-                    show-icon: true;
-
-                    clicked => {
-                        root.mods-requested();
-                    }
-                }
-            }
-
-            Image {
-                x: (parent.width - self.width) / 2;
-                y: actions.y + (actions.height - self.height) / 2;
+                y: panel.y + panel.height + 18px;
                 width: 40px;
                 height: 40px;
                 source: AssetCatalog.horseshoe-decoration;
                 image-fit: contain;
-                transform-rotation: root.horseshoe-angle * 1deg;
+                property <float> angle;
+                Timer {
+                    interval: 16ms;
+                    running: root.preparing;
+                    triggered => { parent.angle = mod(parent.angle + 4, 360); }
+                }
+                transform-rotation: self.angle * 1deg;
                 transform-origin: { x: self.width / 2, y: self.height / 2 };
             }
 
@@ -204,7 +197,7 @@ export component AppWindow inherits Window {
                 progress: root.progress;
                 progress-percent: root.progress-percent;
                 has-progress: root.has-progress;
-                show-diagnostics: root.diagnostics-available;
+                show-diagnostics: root.diagnostics-available && !root.update-visible;
                 diagnostics-clicked => { root.diagnostics-requested(); }
             }
 
@@ -217,7 +210,7 @@ export component AppWindow inherits Window {
                 image-fit: contain;
             }
             }
-            if root.settings-visible && !root.diagnostics-visible: SettingsPanel {
+            if root.settings-visible && !root.diagnostics-visible && !root.auth-visible: SettingsPanel {
                 x: (parent.width - self.width) / 2;
                 y: 24px;
                 width: 840px;
@@ -241,7 +234,7 @@ export component AppWindow inherits Window {
                 retry-requested => { root.memory-retry-requested(); }
                 suggestion-requested => { root.memory-suggestion-requested(); }
             }
-            if root.diagnostics-visible: DiagnosticsPanel {
+            if root.diagnostics-visible && !root.auth-visible: DiagnosticsPanel {
                 x: (parent.width - self.width) / 2;
                 y: 24px;
                 width: 1020px;
@@ -254,40 +247,44 @@ export component AppWindow inherits Window {
                 refresh-requested => { root.diagnostics-refresh-requested(); }
                 open-folder-requested => { root.logs-folder-requested(); }
             }
-        }
-    }
-
-    if root.auth-verified && !root.auth-visible: PixelButton {
-        x: 800px; y: 12px; width: 112px; height: 36px;
-        label: "Выйти";
-        button-enabled: !root.loading;
-        clicked => { root.auth-logout-requested(); }
-    }
-    if root.auth-visible: Rectangle {
-        x: 0px; y: 60px; width: parent.width; height: parent.height - 60px;
-        background: #020a12dd;
-        TouchArea { }
-        Rectangle {
-            width: 680px; height: 430px;
-            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-            background: Palette.panel; border-color: Palette.bronze; border-width: 3px;
-            link-copy := TextInput { text: root.auth-link; visible: false; read-only: true; }
-            VerticalLayout {
-                padding: 32px; spacing: 18px;
-                Text { text: "Вход через Telegram"; color: Palette.frost; font-size: 28px; font-weight: 700; }
-                Text { text: root.auth-message; color: Palette.frost; font-size: 18px; wrap: word-wrap; vertical-stretch: 1; }
-                PixelButton {
-                    height: 52px; label: "Войти через Telegram"; primary: true;
-                    button-enabled: !root.auth-busy;
-                    clicked => { root.auth-requested(); }
-                }
-                HorizontalLayout {
-                    spacing: 12px;
-                    PixelButton { height: 48px; label: "Открыть бота"; button-enabled: root.auth-link != ""; clicked => { root.auth-open-requested(); } }
-                    PixelButton { height: 48px; label: "Копировать ссылку"; button-enabled: root.auth-link != ""; clicked => { link-copy.select-all(); link-copy.copy(); } }
-                }
-                PixelButton { height: 42px; label: "Отменить вход"; button-enabled: root.auth-busy || root.auth-link != ""; clicked => { root.auth-cancelled(); } }
+            if root.auth-visible: AuthPanel {
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                width: 940px; height: 608px;
+                verified: root.auth-verified;
+                busy: root.auth-busy;
+                error: root.auth-error;
+                provider: root.auth-provider;
+                nickname: root.nickname-input;
+                message: root.auth-message;
+                link: root.auth-link;
+                code: root.auth-code;
+                telegram-requested => { root.auth-provider = 1; root.auth-requested(); }
+                discord-requested => { root.auth-provider = 2; }
+                providers-requested => { root.auth-cancelled(); root.auth-provider = 0; }
+                back-requested => { root.auth-back-requested(); }
+                open-requested => { root.auth-open-requested(); }
+                logout-requested => { root.auth-logout-requested(); }
             }
         }
     }
+    if root.update-visible: Rectangle {
+        x: 0px; y: 60px; width: parent.width; height: parent.height - 60px;
+        background: #000000b8;
+        TouchArea { }
+        UpdatePanel {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 660px; height: 340px;
+            current-version: root.update-current-version;
+            new-version: root.update-version;
+            message: root.update-message;
+            busy: root.update-busy;
+            error: root.update-error;
+            can-cancel: root.update-can-cancel;
+            progress: root.update-progress;
+            install-requested => { root.update-install-requested(); }
+            dismiss-requested => { root.update-dismiss-requested(); }
+        }
+    }
+
 }

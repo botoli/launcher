@@ -83,13 +83,17 @@ export component MainPanel inherits Rectangle {
     }
 
     PixelButton {
-        x: parent.width * 0.23;
-        y: parent.height * 0.72;
-        border-radius: 10px;
-        width: 54%;
-        height: 24%;
+        // Cover the baked-in button frame and its decorations in the 1644x957 panel.
+        x: parent.width * 360 / 1644;
+        y: parent.height * 684 / 957;
+        border-radius: 0px;
+        width: parent.width * 948 / 1644;
+        height: parent.height * 256 / 957;
         primary: true;
         asset-backed: true;
+        surface-image: AssetCatalog.play-surface;
+        show-surface: true;
+        surface-opacity: 1;
         button-enabled: root.play-enabled;
         label: root.play-label;
 

@@ -341,6 +341,7 @@ mod tests {
     fn pump_until(events: &EventQueue, condition: impl Fn() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(3);
         while !condition() {
+            slint::platform::update_timers_and_animations();
             let event = events.lock().unwrap().pop_front();
             if let Some(event) = event {
                 event();
@@ -405,6 +406,11 @@ mod tests {
                 renderer.render(&mut pixels, width as usize);
             }));
             if let Some(directory) = std::env::var_os("LAUNCHER_UI_PREVIEW_DIR") {
+                if std::env::var("LAUNCHER_UI_PREVIEW_FILTER")
+                    .is_ok_and(|filter| !name.contains(&filter))
+                {
+                    continue;
+                }
                 fs::create_dir_all(&directory).unwrap();
                 let bytes: Vec<u8> = pixels
                     .into_iter()
@@ -444,6 +450,56 @@ mod tests {
             "modsHash":"test", "modsURL":"https://example.test/mods.zip", "serverIP":""
         }))
         .unwrap();
+        // Completing Telegram login resumes a pending Play only once, after
+        // installing the session; visiting the account page does not launch.
+        let login_window = AppWindow::new().unwrap();
+        let login_gate = launcher_core::auth::telegram::TelegramAuthGate::new(
+            launcher_core::auth::telegram::TelegramAuthClient::new(
+                launcher_core::build_http_client().unwrap(),
+                "http://127.0.0.1:1/".parse().unwrap(),
+            ),
+        );
+        let login = crate::telegram_login::TelegramLogin::bind(
+            &login_window,
+            runtime.handle().clone(),
+            login_gate.clone(),
+            LauncherCore::new(runtime.handle()),
+            crate::telegram_session::SessionStore::new(
+                root.path().join("login.dat"),
+                "test".into(),
+            ),
+        );
+        let login_plays = Rc::new(Cell::new(0));
+        let count = login_plays.clone();
+        let gate_for_callback = login_gate.clone();
+        login_window.on_play_requested(move |nickname| {
+            assert!(gate_for_callback.session().is_some());
+            assert_eq!(nickname, "TestPlayer");
+            count.set(count.get() + 1);
+        });
+        let login_session = launcher_core::auth::telegram::TelegramSession {
+            token: "test-only-session".into(),
+            expires_at: 9999999999999,
+            user: launcher_core::auth::telegram::TelegramUser {
+                login: "tg_test".into(),
+                nickname: "TestPlayer".into(),
+                registration_status: "pending".into(),
+            },
+        };
+        login_window.set_auth_play_pending(true);
+        login.accept(login_session.clone()).unwrap();
+        assert_eq!(login_plays.get(), 1);
+        assert!(login_window.get_play_enabled());
+        assert!(!login_window.get_auth_visible());
+        login.accept(login_session.clone()).unwrap();
+        assert_eq!(login_plays.get(), 1);
+        login_window.set_auth_play_pending(true);
+        login_window.invoke_auth_back_requested();
+        login.accept(login_session).unwrap();
+        assert_eq!(login_plays.get(), 1);
+        drop(login);
+        drop(login_window);
+
         let core = LauncherCore::new(runtime.handle());
         let mut controller = MemorySettingsController::new(settings.clone(), core, &config);
         Rc::get_mut(&mut controller).unwrap().query_memory = eight_gib;
@@ -460,14 +516,69 @@ mod tests {
             r"C:\Users\Player\AppData\Local\EquestrianDreamLauncher\game".into(),
         );
         controller.bind(&window);
+        let login_gate = launcher_core::auth::telegram::TelegramAuthGate::new(
+            launcher_core::auth::telegram::TelegramAuthClient::new(
+                launcher_core::build_http_client().unwrap(),
+                "http://127.0.0.1".parse().unwrap(),
+            ),
+        );
+        let _login = crate::telegram_login::TelegramLogin::bind(
+            &window,
+            runtime.handle().clone(),
+            login_gate,
+            controller.core.clone(),
+            crate::telegram_session::SessionStore::new(
+                root.path().join("state/telegram-session.dat"),
+                "http://127.0.0.1".into(),
+            ),
+        );
         window.show().unwrap();
-        window.set_auth_visible(true);
-        window.set_auth_message("Код запроса: A1B2C3\nОткройте бота и подтвердите вход с этим кодом. Ссылка действует 5 минут.".into());
-        window.set_auth_link("https://t.me/TestAuthBot?start=test".into());
+        // The launcher starts on the home screen; the avatar opens the account page.
+        window.set_auth_verified(false);
+        assert!(!window.get_auth_visible());
+        render(&window, &adapter, "main-signed-out");
+        click(&window, 38.0, 30.0);
+        assert!(window.get_auth_visible());
+        assert_eq!(window.get_auth_provider(), 0);
+        render(&window, &adapter, "auth-providers");
+        click(&window, 824.0, 397.0);
+        assert_eq!(window.get_auth_provider(), 2);
+        assert!(!window.get_auth_busy());
+        render(&window, &adapter, "discord-login");
+        click(&window, 720.0, 540.0);
+        assert_eq!(window.get_auth_provider(), 0);
+        let requests = Rc::new(std::cell::Cell::new(0));
+        let requested = requests.clone();
+        window.on_auth_requested(move || requested.set(requested.get() + 1));
+        click(&window, 550.0, 397.0);
+        assert_eq!(window.get_auth_provider(), 1);
+        assert_eq!(requests.get(), 1, "Telegram opens on the first click");
         window.set_auth_busy(true);
+        window.set_auth_message("Создаём запрос входа…".into());
+        render(&window, &adapter, "telegram-connecting");
+        click(&window, 700.0, 490.0);
+        assert_eq!(requests.get(), 1, "pending requests cannot be duplicated");
+        window.set_auth_code("A1B2C3".into());
+        window.set_auth_message("Откройте бота и подтвердите вход с этим кодом. При первом входе бот поможет выбрать ник. Ссылка действует 5 минут.".into());
+        window.set_auth_link("https://t.me/TestAuthBot?start=test".into());
         render(&window, &adapter, "telegram-login");
-        window.set_auth_visible(false);
         window.set_auth_busy(false);
+        window.set_auth_error(true);
+        window.set_auth_message(
+            "Не удалось подключиться к серверу входа. Проверьте интернет и повторите попытку."
+                .into(),
+        );
+        render(&window, &adapter, "telegram-error");
+        window.set_auth_link("".into());
+        window.set_auth_code("".into());
+        render(&window, &adapter, "telegram-error-no-link");
+        window.set_auth_error(false);
+        window.set_auth_verified(true);
+        render(&window, &adapter, "auth-account");
+        click(&window, 220.0, 150.0);
+        assert!(!window.get_auth_visible());
+        assert!(!window.get_auth_busy());
+        assert_eq!(window.get_auth_provider(), 0);
         render(&window, &adapter, "main-initial");
         // Render every connection icon and verify that failed probes clear the old ping.
         for (ping_ms, signal, preview) in [
@@ -495,7 +606,7 @@ mod tests {
         window.set_server_address("a-very-long-minecraft-server-address.example.org:25565".into());
         render(&window, &adapter, "server-long-address");
         window.set_server_address("server.example:25565".into());
-        let position = slint::LogicalPosition::new(380.0, 594.0);
+        let position = slint::LogicalPosition::new(1042.0, 30.0);
         window
             .window()
             .dispatch_event(WindowEvent::PointerMoved { position });
@@ -556,7 +667,8 @@ mod tests {
                 position,
                 button: slint::platform::PointerEventButton::Left,
             });
-        key(&window, slint::platform::Key::Tab);
+        assert!(window.get_auth_visible());
+        window.set_auth_visible(false);
         key(&window, slint::platform::Key::Tab);
         key(&window, slint::platform::Key::Return);
         assert!(window.get_settings_visible());
@@ -666,17 +778,13 @@ mod tests {
             diagnostics.clone(),
             crate::server_monitor::ServerMonitor::start(&window, runtime.handle(), ""),
         );
-        let mods_clicks = Rc::new(Cell::new(0));
-        let counter = mods_clicks.clone();
-        window.on_mods_requested(move || counter.set(counter.get() + 1));
         render(&window, &adapter, "main-ready");
         click(&window, 590.0, 475.0);
         assert!(window.get_loading());
         assert!(!window.get_play_enabled());
-        click(&window, 380.0, 594.0);
+        click(&window, 1042.0, 30.0);
         assert!(!window.get_settings_visible());
-        click(&window, 800.0, 594.0);
-        assert_eq!(mods_clicks.get(), 0);
+        assert!(window.get_preparing());
         window.invoke_play_requested("OtherPlayer".into());
         assert_eq!(window.get_nickname_input(), "TestPlayer");
         click(&window, 150.0, 20.0);
@@ -692,15 +800,15 @@ mod tests {
         render(&window, &adapter, "main-launching");
         pump_until(&events, || !window.get_loading());
         assert!(window.get_play_enabled());
-        click(&window, 800.0, 594.0);
-        assert_eq!(mods_clicks.get(), 1);
-        click(&window, 380.0, 594.0);
+        assert!(!window.get_preparing());
+        click(&window, 1042.0, 30.0);
         assert!(window.get_settings_visible());
         window.invoke_memory_back_requested();
 
         // Preview the actual UI bindings for unknown-size ZIP downloads,
         // paused transfers, and a named mod being extracted.
         window.set_loading(true);
+        window.set_preparing(true);
         window.set_play_enabled(false);
         let download = launcher_core::ModsSyncProgress {
             stage: launcher_core::ModsSyncStage::Downloading,
@@ -790,5 +898,69 @@ mod tests {
         event();
         assert!(!window.get_diagnostics_visible());
         assert!(window.get_diagnostics_text().is_empty());
+
+        // The real update controller checks in the background, defers its offer
+        // while a game is active, and presents working mouse/keyboard controls.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = runtime
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
+        let update_base = format!("http://{}/", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let response_sent = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let sent = response_sent.clone();
+        runtime.spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 2048];
+            let count = stream.read(&mut request).await.unwrap();
+            assert!(count > 0);
+            let body = serde_json::json!({"version":"9.0.0","url":"/download/launcher/9.0.0.zip","sha256":"0".repeat(64),"size":10485760}).to_string();
+            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+            sent.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        window.set_loading(true);
+        let updates = crate::update_controller::UpdateController::bind(
+            &window,
+            runtime.handle().clone(),
+            launcher_core::launcher_update::UpdateClient::new(update_base).unwrap(),
+        );
+        pump_until(&events, || {
+            response_sent.load(std::sync::atomic::Ordering::SeqCst)
+        });
+        assert!(!window.get_update_visible());
+        window.set_loading(false);
+        pump_until(&events, || window.get_update_visible());
+        assert_eq!(window.get_update_version(), "9.0.0");
+        render(&window, &adapter, "update-available");
+        let installs = Rc::new(Cell::new(0));
+        let count = installs.clone();
+        window.on_update_install_requested(move || count.set(count.get() + 1));
+        click(&window, 465.0, 508.0);
+        assert_eq!(installs.get(), 1, "update action works on its first click");
+        window.invoke_play_requested("TestPlayer".into());
+        assert!(
+            !window.get_loading(),
+            "update dialog must block Play callback"
+        );
+        window.set_update_busy(true);
+        window.set_update_progress(0.42);
+        window.set_update_message("Загрузка: 4,2 из 10,0 МБ".into());
+        render(&window, &adapter, "update-downloading");
+        window.set_update_can_cancel(false);
+        click(&window, 775.0, 508.0);
+        assert!(
+            window.get_update_visible(),
+            "cannot dismiss during helper handoff"
+        );
+        window.set_update_busy(false);
+        window.set_update_error(true);
+        window.set_update_message(
+            "Контрольная сумма обновления не совпадает. Текущая версия продолжает работать.".into(),
+        );
+        render(&window, &adapter, "update-error");
+        click(&window, 775.0, 508.0);
+        assert!(!window.get_update_visible());
+        drop(updates);
     }
 }

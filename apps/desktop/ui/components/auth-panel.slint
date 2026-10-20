@@ -1,0 +1,184 @@
+import { Palette } from "../theme/palette.slint";
+import { AssetCatalog } from "../theme/assets.slint";
+import { PixelButton } from "pixel-button.slint";
+
+component ProviderCard inherits Rectangle {
+    in property <image> icon;
+    in property <string> provider;
+    in property <string> detail;
+    in property <string> action;
+    in property <bool> button-enabled: true;
+    callback clicked();
+    forward-focus: keyboard;
+    accessible-role: button;
+    accessible-label: root.action + " через " + root.provider;
+    opacity: root.button-enabled ? 1 : 0.55;
+    background: area.pressed ? #0a1c2a : area.has-hover ? #183448 : #10283b;
+    border-width: 2px;
+    border-color: keyboard.has-focus ? Palette.leaf : area.has-hover ? Palette.bronze : #405464;
+    Rectangle {
+        x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+        background: transparent; border-width: 1px; border-color: #263e4f;
+    }
+    VerticalLayout {
+        width: parent.width; height: parent.height;
+        padding: 20px; spacing: 10px; alignment: start;
+        Image { width: 76px; height: 76px; source: root.icon; image-fit: contain; }
+        Text { text: root.provider; color: Palette.frost; font-size: 24px; font-weight: 600; }
+        Text { text: root.detail; color: Palette.muted; font-size: 14px; wrap: word-wrap; vertical-stretch: 1; }
+        Text { text: root.action; color: Palette.leaf; font-size: 16px; font-weight: 600; }
+    }
+    keyboard := FocusScope {
+        enabled: root.button-enabled; focus-on-click: false;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") { root.clicked(); return accept; }
+            reject
+        }
+    }
+    area := TouchArea {
+        enabled: root.button-enabled; mouse-cursor: pointer;
+        clicked => { keyboard.focus(); root.clicked(); }
+    }
+}
+
+export component AuthPanel inherits Rectangle {
+    in property <bool> verified;
+    in property <bool> busy;
+    in property <bool> error;
+    in property <int> provider;
+    in property <string> nickname;
+    in property <string> message;
+    in property <string> link;
+    in property <string> code;
+    callback telegram-requested();
+    callback discord-requested();
+    callback providers-requested();
+    callback back-requested();
+    callback open-requested();
+    callback logout-requested();
+    background: transparent;
+
+    Image { width: parent.width; height: parent.height; source: AssetCatalog.account-frame; image-fit: fill; }
+    PixelButton {
+        x: 32px; y: 28px; width: 176px; height: 42px; label: "К лаунчеру";
+        clicked => { root.back-requested(); }
+    }
+    Rectangle { x: 306px; y: 100px; width: 1px; height: parent.height - 152px; background: #314250; }
+    Image {
+        x: 48px; y: 128px; width: 226px; height: 180px;
+        source: AssetCatalog.project-emblem; image-fit: contain;
+    }
+    Text {
+        x: 38px; y: 328px; width: 244px; height: 42px;
+        text: "EquestrianDream"; font-family: "Trebuchet MS"; font-size: 25px;
+        color: Palette.frost; horizontal-alignment: center;
+    }
+    Text {
+        x: 54px; y: 382px; width: 212px; height: 84px;
+        text: "Твой мир,\nтвоя история."; font-size: 21px; color: Palette.muted;
+        horizontal-alignment: center;
+    }
+    content := Rectangle {
+        x: 344px; y: 96px; width: parent.width - self.x - 40px; height: parent.height - self.y - 40px;
+        background: transparent;
+        if !root.verified && root.provider == 0: VerticalLayout {
+            width: parent.width; height: parent.height;
+            spacing: 14px; alignment: start;
+            Text { text: "Вход в аккаунт"; font-family: "Trebuchet MS"; font-size: 34px; color: Palette.frost; }
+            Text { text: "Выбери, как войти в EquestrianDream."; color: Palette.muted; font-size: 16px; }
+            Rectangle { height: 12px; background: transparent; }
+            HorizontalLayout {
+                width: parent.width; height: 254px; spacing: 18px;
+                ProviderCard {
+                    width: (parent.width - 18px) / 2; icon: AssetCatalog.telegram-icon; provider: "Telegram";
+                    detail: "Подтверди вход\nв Telegram-боте."; action: "Войти"; button-enabled: !root.busy;
+                    clicked => { root.telegram-requested(); }
+                }
+                ProviderCard {
+                    width: (parent.width - 18px) / 2; icon: AssetCatalog.discord-icon; provider: "Discord";
+                    detail: "Ещё один способ входа.\nСкоро в лаунчере."; action: "Подробнее"; button-enabled: !root.busy;
+                    clicked => { root.discord-requested(); }
+                }
+            }
+            Text {
+                text: root.busy || root.error ? root.message : "Впервые здесь? Бот поможет создать аккаунт\nпри первом входе через Telegram.";
+                color: root.error ? #ef9d84 : Palette.muted; font-size: 14px; wrap: word-wrap;
+            }
+        }
+        if !root.verified && root.provider == 1: VerticalLayout {
+            width: parent.width; height: parent.height;
+            spacing: 16px; alignment: start;
+            HorizontalLayout {
+                height: 70px; spacing: 18px; alignment: start;
+                Image { width: 68px; height: 68px; source: AssetCatalog.telegram-icon; image-fit: contain; }
+                Text { text: "Вход через Telegram"; font-family: "Trebuchet MS"; font-size: 28px; color: Palette.frost; vertical-alignment: center; }
+            }
+            Rectangle {
+                height: 98px; background: #06121f; border-width: 1px;
+                border-color: root.error ? #a65c45 : code-keyboard.has-focus || code-area.has-hover ? Palette.bronze : #405464;
+                forward-focus: code-keyboard;
+                accessible-role: button;
+                accessible-label: "Скопировать код подтверждения";
+                VerticalLayout {
+                    padding: 12px; spacing: 4px;
+                    Text { text: root.code != "" ? "Код подтверждения · нажмите, чтобы скопировать" : "Подключение к Telegram"; font-size: 13px; color: Palette.muted; horizontal-alignment: center; }
+                    Text { text: root.code != "" ? root.code : root.busy ? "Ожидаем ответ…" : "Повторить вход"; font-family: "Consolas"; font-size: root.code != "" ? 32px : 22px; font-weight: 600; color: Palette.frost; horizontal-alignment: center; }
+                }
+                code-keyboard := FocusScope {
+                    enabled: root.code != ""; focus-on-click: false;
+                    key-pressed(event) => {
+                        if (event.text == Key.Return || event.text == " ") {
+                            code-copy.select-all(); code-copy.copy();
+                            return accept;
+                        }
+                        reject
+                    }
+                }
+                code-area := TouchArea {
+                    enabled: root.code != "";
+                    mouse-cursor: root.code != "" ? pointer : default;
+                    clicked => { code-keyboard.focus(); code-copy.select-all(); code-copy.copy(); }
+                }
+            }
+            Text { text: root.message; color: root.error ? #ef9d84 : Palette.muted; font-size: 15px; wrap: word-wrap; min-height: 68px; }
+            PixelButton {
+                height: 54px; label: root.link != "" ? "Открыть бота" : "Войти через Telegram";
+                primary: true; button-enabled: root.link != "" || !root.busy;
+                clicked => { if (root.link != "") { root.open-requested(); } else { root.telegram-requested(); } }
+            }
+            HorizontalLayout {
+                height: 44px; spacing: 12px;
+                PixelButton {
+                    horizontal-stretch: 1; label: "Копировать ссылку"; button-enabled: root.link != "";
+                    clicked => { link-copy.select-all(); link-copy.copy(); }
+                }
+                PixelButton { horizontal-stretch: 1; label: "Другой способ"; clicked => { root.providers-requested(); } }
+            }
+            if root.error && root.link != "": PixelButton {
+                height: 40px; label: "Новый запрос"; button-enabled: !root.busy;
+                clicked => { root.telegram-requested(); }
+            }
+        }
+        if !root.verified && root.provider == 2: VerticalLayout {
+            width: parent.width; height: parent.height;
+            spacing: 22px; alignment: start;
+            Image { width: 96px; height: 96px; source: AssetCatalog.discord-icon; image-fit: contain; }
+            Text { text: "Вход через Discord"; font-family: "Trebuchet MS"; font-size: 32px; color: Palette.frost; }
+            Text { text: "Этот способ входа ещё не подключён.\nПока войди через Telegram — он уже доступен."; font-size: 17px; color: Palette.muted; wrap: word-wrap; }
+            PixelButton { height: 54px; label: "Войти через Telegram"; primary: true; button-enabled: !root.busy; clicked => { root.telegram-requested(); } }
+            PixelButton { height: 44px; label: "Все способы входа"; clicked => { root.providers-requested(); } }
+        }
+        if root.verified: VerticalLayout {
+            width: parent.width; height: parent.height;
+            spacing: 20px; alignment: start;
+            Text { text: "Твой аккаунт"; font-family: "Trebuchet MS"; font-size: 34px; color: Palette.frost; }
+            Image { width: 96px; height: 96px; source: AssetCatalog.avatar; image-fit: contain; }
+            Text { text: root.nickname; color: Palette.frost; font-size: 30px; font-weight: 600; }
+            Text { text: "Вход выполнен через Telegram.\nВсё готово к игре."; color: Palette.muted; font-size: 17px; }
+            PixelButton { height: 54px; label: "Вернуться к игре"; primary: true; clicked => { root.back-requested(); } }
+            PixelButton { height: 44px; label: "Выйти из аккаунта"; clicked => { root.logout-requested(); } }
+        }
+    }
+    link-copy := TextInput { text: root.link; visible: false; read-only: true; }
+    code-copy := TextInput { text: root.code; visible: false; read-only: true; }
+}

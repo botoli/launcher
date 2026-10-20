@@ -32,7 +32,11 @@ impl SessionStore {
         }
         let decoded = protect(&bytes, false)?;
         let record: Record = serde_json::from_slice(&decoded).map_err(io::Error::other)?;
-        Ok((record.server == self.server).then_some(record.session))
+        // Only migrate the former built-in origin to its verified HTTPS endpoint.
+        // The restored token is still validated by /api/auth/me before use.
+        let legacy_production = record.server.trim_end_matches('/') == "http://87.58.220.248:3000"
+            && self.server.trim_end_matches('/') == "https://89.125.214.122";
+        Ok((record.server == self.server || legacy_production).then_some(record.session))
     }
     pub fn save(&self, session: TelegramSession) -> io::Result<()> {
         let bytes = serde_json::to_vec(&Record {
@@ -132,6 +136,18 @@ mod tests {
                 .any(|s| s == b"secret-never-in-plaintext")
         );
         assert_eq!(store.load()?.unwrap().user.nickname, "Player");
+        assert!(
+            SessionStore::new(path.clone(), "https://other.example".into())
+                .load()?
+                .is_none()
+        );
+        let session = store.load()?.unwrap();
+        SessionStore::new(path.clone(), "http://87.58.220.248:3000/".into()).save(session)?;
+        assert!(
+            SessionStore::new(path.clone(), "https://89.125.214.122".into())
+                .load()?
+                .is_some()
+        );
         assert!(
             SessionStore::new(path.clone(), "https://other.example".into())
                 .load()?

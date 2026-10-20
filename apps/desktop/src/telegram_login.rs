@@ -37,12 +37,20 @@ impl TelegramLogin {
             generation: Cell::new(0),
             challenge: RefCell::new(None),
         });
-        window.set_auth_visible(true);
-        window.set_auth_message("Войдите через Telegram, чтобы запустить игру. При первом входе бот предложит выбрать ник.".into());
+        window.set_auth_visible(false);
+        window.set_auth_message("Выберите способ входа в аккаунт.".into());
         let c = this.clone();
         window.on_auth_requested(move || c.start());
         let c = this.clone();
         window.on_auth_cancelled(move || c.cancel());
+        let c = this.clone();
+        window.on_auth_back_requested(move || {
+            c.cancel();
+            if let Some(w) = c.window.upgrade() {
+                w.set_auth_provider(0);
+                w.set_auth_visible(false);
+            }
+        });
         let c = this.clone();
         window.on_auth_open_requested(move || {
             if let Some(c) = c.challenge.borrow().as_ref() {
@@ -57,28 +65,36 @@ impl TelegramLogin {
     fn show_error(&self, text: &str) {
         if let Some(w) = self.window.upgrade() {
             w.set_auth_busy(false);
+            w.set_auth_error(true);
             w.set_auth_message(text.into());
         }
     }
-    fn accept(&self, session: TelegramSession) -> Result<(), &'static str> {
+    pub(crate) fn accept(&self, session: TelegramSession) -> Result<(), &'static str> {
         let profile = OfflineProfile::new(&session.user.nickname)
             .map_err(|_| "Сервер вернул некорректный ник.")?;
         self.store
             .save(session.clone())
             .map_err(|_| "Не удалось безопасно сохранить сессию. Повторите вход.")?;
         self.core.set_offline_profile(profile);
+        self.gate.set_session(Some(session.clone()));
         if let Some(w) = self.window.upgrade() {
             w.set_nickname_input(session.user.nickname.as_str().into());
             w.set_nickname_error("".into());
             w.set_auth_verified(true);
             w.set_auth_visible(false);
             w.set_auth_busy(false);
+            w.set_auth_error(false);
+            w.set_auth_code("".into());
+            w.set_auth_provider(0);
             w.set_auth_link("".into());
             if !w.get_loading() {
                 w.set_play_enabled(true);
             }
+            if w.get_auth_play_pending() {
+                w.set_auth_play_pending(false);
+                w.invoke_play_requested(w.get_nickname_input());
+            }
         }
-        self.gate.set_session(Some(session));
         Ok(())
     }
     fn restore(self: &Rc<Self>) {
@@ -123,14 +139,24 @@ impl TelegramLogin {
         });
     }
     fn start(self: &Rc<Self>) {
-        if self.window.upgrade().is_none_or(|w| w.get_auth_busy()) {
+        if self
+            .window
+            .upgrade()
+            .is_none_or(|w| w.get_auth_busy() || w.get_loading() || w.get_auth_verified())
+        {
             return;
         }
+        let play_pending = self
+            .window
+            .upgrade()
+            .is_some_and(|w| w.get_auth_play_pending());
         self.cancel();
         let Some(w) = self.window.upgrade() else {
             return;
         };
+        w.set_auth_play_pending(play_pending);
         w.set_auth_visible(true);
+        w.set_auth_provider(1);
         w.set_auth_busy(true);
         w.set_auth_message("Создаём запрос входа…".into());
         let generation = self.generation.get();
@@ -162,7 +188,8 @@ impl TelegramLogin {
             *c.challenge.borrow_mut() = Some(challenge.clone());
             if let Some(w) = c.window.upgrade() {
                 w.set_auth_link(challenge.url.as_str().into());
-                w.set_auth_message(format!("Код запроса: {}\nОткройте бота и подтвердите вход с этим кодом. Ссылка действует 5 минут.", challenge.code).into());
+                w.set_auth_code(challenge.code.as_str().into());
+                w.set_auth_message("Откройте бота и подтвердите вход с этим кодом. При первом входе бот поможет выбрать ник. Ссылка действует 5 минут.".into());
             }
             let mut failures = 0;
             loop {
@@ -237,9 +264,12 @@ impl TelegramLogin {
             });
         }
         if let Some(w) = self.window.upgrade() {
+            w.set_auth_play_pending(false);
             w.set_auth_busy(false);
+            w.set_auth_error(false);
             w.set_auth_link("".into());
-            w.set_auth_message("Войдите через Telegram, чтобы запустить игру.".into());
+            w.set_auth_code("".into());
+            w.set_auth_message("Выберите способ входа в аккаунт.".into());
         }
     }
     fn logout(self: &Rc<Self>) {
@@ -253,6 +283,7 @@ impl TelegramLogin {
         if let Some(w) = self.window.upgrade() {
             w.set_auth_verified(false);
             w.set_auth_visible(true);
+            w.set_auth_provider(0);
             w.set_nickname_input("".into());
         }
         if self.store.remove().is_err() {

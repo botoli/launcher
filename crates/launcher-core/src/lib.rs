@@ -7,6 +7,7 @@ pub mod identity;
 pub mod installer;
 pub mod java;
 mod launch_options;
+pub mod launcher_update;
 pub mod manifest;
 pub mod minecraft;
 mod mods;
@@ -222,6 +223,7 @@ impl LauncherState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LauncherFailure {
+    AuthenticationVerification,
     ClientConfig,
     ModsSync,
     LaunchOptions,
@@ -762,10 +764,20 @@ async fn run_backend_play_workflow(
                     return WorkflowControl::Continue;
                 }
             }
-            Err(_) => {
+            Err(auth::telegram::TelegramAuthError::Unauthorized) => {
                 publish_state(
                     states,
                     LauncherState::new(LauncherStatus::AuthenticationRequired, None),
+                );
+                return WorkflowControl::Continue;
+            }
+            Err(error) => {
+                publish_state(
+                    states,
+                    LauncherState::with_diagnostic(
+                        LauncherFailure::AuthenticationVerification,
+                        LauncherDiagnostic::from_error(&error),
+                    ),
                 );
                 return WorkflowControl::Continue;
             }

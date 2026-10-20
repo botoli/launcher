@@ -37,6 +37,10 @@ pub enum TelegramAuthError {
     Network,
     #[error("Сервис входа вернул некорректный ответ.")]
     InvalidResponse,
+    #[error(
+        "По этому адресу отсутствует Telegram API (HTTP 404). Проверьте адрес сервера или обновите backend."
+    )]
+    ApiUnavailable,
     #[error("Telegram-бот ещё не подключён к серверу.")]
     NotConfigured,
 }
@@ -77,8 +81,19 @@ impl TelegramAuthClient {
             .send()
             .await
             .map_err(|_| TelegramAuthError::Network)?;
-        match response.status().as_u16() {
+        let status = response.status().as_u16();
+        if !response.status().is_success() {
+            // Do not log URLs, response bodies or credentials from auth requests.
+            tracing::warn!(
+                http_status = status,
+                "Telegram authentication request failed"
+            );
+        }
+        match status {
             401 | 403 => return Err(TelegramAuthError::Unauthorized),
+            404 if path == "/api/auth/telegram/challenges" => {
+                return Err(TelegramAuthError::ApiUnavailable);
+            }
             503 => return Err(TelegramAuthError::NotConfigured),
             200..=299 => {}
             _ => return Err(TelegramAuthError::Network),
@@ -268,6 +283,42 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn missing_telegram_api_is_not_reported_as_a_connection_problem() {
+        let (url, request) = mock(r#"{"error":"API endpoint not found"}"#, 404).await;
+        let client = TelegramAuthClient::new(reqwest::Client::new(), url);
+        let error = client.begin().await.err().expect("missing API must fail");
+
+        assert!(error.to_string().contains("HTTP 404"));
+        assert!(!error.to_string().contains("Проверьте подключение"));
+        assert!(
+            request
+                .await
+                .unwrap()
+                .starts_with("POST /api/auth/telegram/challenges HTTP/1.1")
+        );
+    }
+    #[tokio::test]
+    async fn creates_challenge_and_distinguishes_a_disconnected_bot() {
+        let (url, request) = mock(
+            r#"{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","poll_secret":"test-only-secret","code":"123456","expires_at":9999999999999,"url":"https://t.me/test_bot?start=test"}"#,
+            200,
+        )
+        .await;
+        let client = TelegramAuthClient::new(reqwest::Client::new(), url);
+        let challenge = client.begin().await.unwrap();
+        assert_eq!(challenge.code, "123456");
+        assert_eq!(challenge.url, "https://t.me/test_bot?start=test");
+        request.await.unwrap();
+
+        let (url, request) = mock("{}", 503).await;
+        let client = TelegramAuthClient::new(reqwest::Client::new(), url);
+        assert!(matches!(
+            client.begin().await,
+            Err(TelegramAuthError::NotConfigured)
+        ));
+        request.await.unwrap();
+    }
+    #[tokio::test]
     async fn verifies_pending_and_keeps_credentials_out_of_urls_and_debug() {
         let (url, request) = mock(
             r#"{"login":"tg_1","nickname":"Player","registrationStatus":"pending"}"#,
@@ -323,12 +374,16 @@ mod tests {
     }
     #[tokio::test]
     async fn core_requires_session_before_any_backend_downloads() {
-        let base: reqwest::Url = "http://127.0.0.1:1/".parse().unwrap();
+        let (base, request) = mock(
+            r#"{"login":"tg_1","nickname":"Player","registrationStatus":"pending"}"#,
+            200,
+        )
+        .await;
         let client = reqwest::Client::new();
         let gate = TelegramAuthGate::new(TelegramAuthClient::new(client.clone(), base.clone()));
         let temp = tempfile::tempdir().unwrap();
         let vanilla = crate::VanillaLaunchConfig {
-            telegram_auth: Some(gate),
+            telegram_auth: Some(gate.clone()),
             heap_memory: None,
             jvm_args: vec![],
             version_id: "test".into(),
@@ -342,11 +397,12 @@ mod tests {
             launcher_version: "test".into(),
         };
         let game = crate::LauncherGameConfig::new(client.clone(), vanilla);
+        let (backend_base, config_request) = mock("{}", 200).await;
         let core = crate::LauncherCore::new_backend_with_game(
             &tokio::runtime::Handle::current(),
             temp.path(),
             client,
-            crate::LauncherBackendConfig::new(base).unwrap(),
+            crate::LauncherBackendConfig::new(backend_base).unwrap(),
             game,
         );
         core.set_offline_profile(crate::OfflineProfile::new("Player").unwrap());
@@ -362,5 +418,37 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+
+        // Re-authentication must let the same actor proceed to client config.
+        gate.set_session(Some(session()));
+        core.send_command(crate::LauncherCommand::Play)
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                states.changed().await.unwrap();
+                if states.borrow().status() == crate::LauncherStatus::Error {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            states.borrow().failure(),
+            Some(&crate::LauncherFailure::ClientConfig)
+        );
+        assert!(
+            config_request
+                .await
+                .unwrap()
+                .starts_with("GET /api/client-config HTTP/1.1")
+        );
+        assert!(
+            request
+                .await
+                .unwrap()
+                .starts_with("GET /api/auth/me HTTP/1.1")
+        );
     }
 }

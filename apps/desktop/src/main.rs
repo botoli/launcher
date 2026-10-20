@@ -5,11 +5,13 @@ mod diagnostics;
 mod logging;
 mod memory_settings;
 mod platform;
+mod self_update;
 mod server_monitor;
 mod settings;
 mod system_memory;
 mod telegram_login;
 mod telegram_session;
+mod update_controller;
 
 use std::{process::ExitCode, rc::Rc};
 
@@ -50,6 +52,8 @@ enum DesktopError {
     },
     #[error("failed to initialize the async runtime: {0}")]
     AsyncRuntime(#[from] std::io::Error),
+    #[error("launcher update startup error: {0}")]
+    UpdateStartup(std::io::Error),
     #[error("desktop UI error: {0}")]
     Ui(#[from] slint::PlatformError),
 }
@@ -116,6 +120,14 @@ struct ConfiguredLauncher {
 }
 
 fn main() -> ExitCode {
+    match self_update::dispatch_helper() {
+        Ok(Some(code)) => return code,
+        Ok(None) => {}
+        Err(error) => {
+            platform::show_error_message("Обновление лаунчера", &error.to_string());
+            return ExitCode::FAILURE;
+        }
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -162,6 +174,20 @@ fn run() -> Result<(), DesktopError> {
     apply_static_display_state(&window, &DesktopDisplayState::default());
     bind_window_callbacks(&window);
     window.set_installation_path(app_config.paths.game().display().to_string().into());
+    let _update_controller = match launcher_core::launcher_update::UpdateClient::new(
+        app_config.backend.server_url().clone(),
+    ) {
+        Ok(client) => Some(update_controller::UpdateController::bind(
+            &window,
+            runtime.handle().clone(),
+            client,
+        )),
+        Err(error) => {
+            tracing::warn!(%error, "launcher updates disabled for this backend");
+            None
+        }
+    };
+    runtime.spawn_blocking(self_update::cleanup_completed);
 
     match runtime.block_on(configure_launcher(runtime.handle(), app_config)) {
         Ok(configured) => {
@@ -223,6 +249,7 @@ fn run() -> Result<(), DesktopError> {
         }
     }
 
+    self_update::schedule_health_signal().map_err(DesktopError::UpdateStartup)?;
     window.run()?;
     Ok(())
 }
@@ -344,8 +371,11 @@ fn apply_static_display_state(window: &AppWindow, state: &DesktopDisplayState) {
 
 fn apply_launcher_state(window: &AppWindow, state: &LauncherState) {
     if state.status() == LauncherStatus::AuthenticationRequired {
+        window.set_auth_play_pending(true);
         window.set_auth_verified(false);
         window.set_auth_visible(true);
+        window.set_auth_provider(0);
+        window.set_auth_error(true);
         window
             .set_auth_message("Не удалось проверить доступ. Повторите вход через Telegram.".into());
     }
@@ -378,6 +408,10 @@ fn apply_launcher_state(window: &AppWindow, state: &LauncherState) {
             "Укажите ник для запуска игры".to_owned(),
         ),
         LauncherStatus::Error => match state.failure() {
+            Some(LauncherFailure::AuthenticationVerification) => (
+                "Не удалось проверить доступ".to_owned(),
+                "Проверьте подключение и нажмите «Играть» ещё раз".to_owned(),
+            ),
             Some(LauncherFailure::ClientConfig) => (
                 "Ошибка конфигурации".to_owned(),
                 "Не удалось получить client-config с launcher server".to_owned(),
@@ -464,6 +498,7 @@ fn apply_launcher_state(window: &AppWindow, state: &LauncherState) {
         state.status(),
         LauncherStatus::Idle
             | LauncherStatus::Ready
+            | LauncherStatus::AuthenticationRequired
             | LauncherStatus::ProfileRequired
             | LauncherStatus::Error
     );
@@ -486,7 +521,7 @@ fn apply_launcher_state(window: &AppWindow, state: &LauncherState) {
         }
         .into(),
     );
-    window.set_horseshoe_angle((progress_value * 1_800.0) % 360.0);
+    window.set_preparing(loading && state.status() != LauncherStatus::Running);
     if state.status() != LauncherStatus::Error
         && let Some(progress) = state.mods_progress()
     {
@@ -625,7 +660,6 @@ fn apply_mods_progress(window: &AppWindow, progress: &ModsSyncProgress) {
     window.set_has_progress(fraction.is_some());
     window.set_progress(fraction.unwrap_or(0.0));
     window.set_progress_percent((fraction.unwrap_or(0.0) * 100.0).round() as i32);
-    window.set_horseshoe_angle((progress.elapsed.as_secs_f32() * 45.0) % 360.0);
 }
 
 fn launch_stage_text(stage: LauncherStage) -> (&'static str, &'static str) {
@@ -677,6 +711,7 @@ fn launch_stage_text(stage: LauncherStage) -> (&'static str, &'static str) {
 fn apply_launch_pending(window: &AppWindow) {
     window.set_progress_metrics("".into());
     window.set_loading(true);
+    window.set_preparing(true);
     window.set_play_enabled(false);
     window.set_play_label("Проверка...".into());
     window.set_settings_visible(false);
@@ -701,7 +736,7 @@ fn apply_configuration_error(window: &AppWindow, message: &str) {
     window.set_has_progress(false);
     window.set_loading(false);
     window.set_play_enabled(false);
-    window.set_horseshoe_angle(0.0);
+    window.set_preparing(false);
 }
 
 fn apply_profile_required(window: &AppWindow, message: &str) {
@@ -714,14 +749,10 @@ fn apply_profile_required(window: &AppWindow, message: &str) {
     window.set_has_progress(false);
     window.set_loading(false);
     window.set_play_enabled(true);
-    window.set_horseshoe_angle(0.0);
+    window.set_preparing(false);
 }
 
 fn bind_window_callbacks(window: &AppWindow) {
-    window.on_mods_requested(|| {
-        tracing::debug!("Mods clicked; no mods action is configured");
-    });
-
     let window_weak = window.as_weak();
     window.on_move_window(move |delta_x, delta_y| {
         if let Some(window) = window_weak.upgrade() {
@@ -751,10 +782,11 @@ fn bind_play_command(
         let Some(window) = window_weak.upgrade() else {
             return;
         };
-        if window.get_loading() || !window.get_play_enabled() {
+        if window.get_loading() || window.get_update_visible() || !window.get_play_enabled() {
             return;
         }
         if !window.get_auth_verified() || telegram.session().is_none() {
+            window.set_auth_play_pending(true);
             window.set_auth_visible(true);
             return;
         }
