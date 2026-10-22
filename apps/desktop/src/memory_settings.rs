@@ -456,6 +456,80 @@ mod tests {
             "modsHash":"test", "modsURL":"https://example.test/mods.zip", "serverIP":""
         }))
         .unwrap();
+        // Initial configuration fails twice, then succeeds in the same window.
+        // Duplicate Retry clicks must not create parallel bootstrap operations.
+        let bootstrap_window = AppWindow::new().unwrap();
+        let bootstrap_diagnostics =
+            crate::diagnostics::DiagnosticsController::new(runtime.handle().clone(), root.path());
+        bootstrap_diagnostics.bind(&bootstrap_window);
+        let listener = runtime
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
+        let backend = format!("http://{}/", listener.local_addr().unwrap());
+        let payload = serde_json::json!({
+            "version":"1.21.1", "loader":"vanilla", "loaderVersion":"", "javaVersion":21,
+            "minMemory":2048, "maxMemory":8192, "jvmArgs":[], "servers":[],
+            "modsHash":"test", "modsURL":"https://example.test/mods.zip", "serverIP":""
+        })
+        .to_string();
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = requests.clone();
+        let server = runtime.spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            for attempt in 0..3 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let count = stream.read(&mut request).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..count])
+                        .starts_with("GET /api/client-config")
+                );
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (status, body) = if attempt < 2 {
+                    ("503 Service Unavailable", "unavailable")
+                } else {
+                    ("200 OK", payload.as_str())
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let bootstrap_config =
+            crate::app_config::DesktopAppConfig::for_test(&root.path().join("bootstrap"), &backend);
+        bootstrap_config.paths.prepare().unwrap();
+        crate::bind_launcher_startup(
+            &bootstrap_window,
+            runtime.handle().clone(),
+            bootstrap_config,
+            launcher_core::java_install::JavaSetup::channel().0,
+            bootstrap_diagnostics.clone(),
+        );
+        assert!(bootstrap_window.get_loading());
+        bootstrap_window.invoke_retry_requested();
+        pump_until(&events, || bootstrap_window.get_retry_available());
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(!bootstrap_window.get_play_enabled());
+        assert!(
+            bootstrap_window
+                .get_diagnostics_advice()
+                .contains("запрошена заново")
+        );
+        bootstrap_window.invoke_retry_requested();
+        bootstrap_window.invoke_retry_requested();
+        pump_until(&events, || bootstrap_window.get_retry_available());
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+        bootstrap_window.invoke_retry_requested();
+        pump_until(&events, || bootstrap_window.get_repair_available());
+        assert!(bootstrap_window.get_play_enabled());
+        assert_eq!(bootstrap_window.get_version(), "1.21.1");
+        assert!(!bootstrap_window.get_diagnostics_visible());
+        assert!(!bootstrap_window.get_retry_available());
+        runtime.block_on(server).unwrap();
+        drop(bootstrap_window);
+
         // Completing Telegram login resumes a pending Play only once, after
         // installing the session; visiting the account page does not launch.
         let login_window = AppWindow::new().unwrap();
@@ -514,6 +588,18 @@ mod tests {
         let diagnostics =
             crate::diagnostics::DiagnosticsController::new(runtime.handle().clone(), root.path());
         diagnostics.bind(&window);
+        crate::bind_repair_command(
+            &window,
+            controller.core.clone(),
+            runtime.handle().clone(),
+            diagnostics.clone(),
+        );
+        crate::bind_preparation_commands(
+            &window,
+            controller.core.clone(),
+            runtime.handle().clone(),
+            diagnostics.clone(),
+        );
         crate::apply_launcher_state(&window, &controller.core.subscribe_state().borrow());
         window.set_version("1.21.1".into());
         window.set_server_address("server.example:25565".into());
@@ -696,9 +782,94 @@ mod tests {
         assert!(window.get_memory_ready());
         render(&window, &adapter, "settings");
 
+        // Repair is independent of login and memory validation, and does not
+        // commit the settings form when the user leaves it to reinstall mods.
+        let saved_settings = fs::read(&path).unwrap();
+        window.set_auth_verified(false);
+        window.set_memory_ready(false);
+        window.invoke_memory_input_edited("invalid".into());
+        window.set_update_visible(true);
+        window.invoke_repair_requested();
+        assert!(!window.get_loading(), "updates block repair");
+        window.set_update_visible(false);
+        window.invoke_repair_requested();
+        assert!(window.get_loading());
+        assert!(window.get_repairing());
+        assert!(!window.get_settings_visible());
+        assert!(!window.get_auth_visible(), "repair needs no login");
+        assert_eq!(fs::read(&path).unwrap(), saved_settings);
+        window.invoke_repair_requested();
+        assert!(window.get_repairing(), "duplicate repair stays locked");
+        render(&window, &adapter, "repair-started");
+        // The test core simulates preparation without a Minecraft process.
+        let states = controller.core.subscribe_state();
+        pump_until(&events, || {
+            states.borrow().status() == launcher_core::LauncherStatus::Ready
+        });
+        crate::apply_launcher_state(&window, &states.borrow());
+        assert!(!window.get_loading());
+        assert!(!window.get_repairing());
+        assert_eq!(window.get_launcher_status(), "Восстановлено");
+        assert_eq!(fs::read(&path).unwrap(), saved_settings);
+        render(&window, &adapter, "repair-complete");
+
+        // Cancellation locks immediately, survives progress updates, and is
+        // released only after the core acknowledges the operation has ended.
+        window.invoke_repair_requested();
+        pump_until(&events, || {
+            states.borrow().status() == launcher_core::LauncherStatus::Checking
+        });
+        crate::apply_launcher_state(&window, &states.borrow());
+        assert!(window.get_cancel_allowed());
+        let checking = states.borrow().clone();
+        window.invoke_cancel_requested();
+        assert!(window.get_cancel_pending());
+        window.invoke_cancel_requested();
+        crate::apply_launcher_state(&window, &checking);
+        assert!(window.get_cancel_pending());
+        render(&window, &adapter, "preparation-cancelling");
+        pump_until(&events, || {
+            states.borrow().status() == launcher_core::LauncherStatus::Ready
+        });
+        crate::apply_launcher_state(&window, &states.borrow());
+        assert!(!window.get_cancel_pending());
+        assert!(!window.get_loading());
+        assert_eq!(window.get_launcher_status(), "Отменено");
+        assert_eq!(fs::read(&path).unwrap(), saved_settings);
+
+        // Retrying preserves which operation failed, including after the
+        // transient `repairing` flag has been cleared by an error state.
+        let repair_retries = Rc::new(Cell::new(0));
+        let play_retries = Rc::new(Cell::new(0));
+        let count = repair_retries.clone();
+        window.on_repair_requested(move || count.set(count.get() + 1));
+        let count = play_retries.clone();
+        window.on_play_requested(move |_| count.set(count.get() + 1));
+        window.set_retry_available(true);
+        window.set_retry_repair(true);
+        window.set_repairing(false);
+        window.invoke_retry_requested();
+        assert_eq!(repair_retries.get(), 1);
+        assert_eq!(play_retries.get(), 0);
+        window.set_retry_repair(false);
+        window.invoke_retry_requested();
+        assert_eq!(play_retries.get(), 1);
+        window.set_loading(true);
+        window.invoke_retry_requested();
+        assert_eq!(play_retries.get(), 1, "retry is blocked during preparation");
+        crate::apply_launcher_state(&window, &states.borrow());
+        crate::bind_repair_command(
+            &window,
+            controller.core.clone(),
+            runtime.handle().clone(),
+            diagnostics.clone(),
+        );
+        window.set_auth_verified(true);
+        window.invoke_settings_requested();
+
         // Exercise the real TextInput binding, including replacing selected text
         // and arrow keys, rather than only calling the Rust callbacks.
-        let position = slint::LogicalPosition::new(850.0, 257.0);
+        let position = slint::LogicalPosition::new(850.0, 225.0);
         window.window().dispatch_event(WindowEvent::PointerPressed {
             position,
             button: slint::platform::PointerEventButton::Left,
@@ -922,6 +1093,18 @@ mod tests {
         assert!(window.get_progress_metrics().contains("37 / 112"));
         assert!(window.get_has_progress());
         render(&window, &adapter, "mods-installing");
+        let committing = launcher_core::ModsSyncProgress {
+            stage: launcher_core::ModsSyncStage::Committing,
+            ..extracting
+        };
+        crate::apply_mods_progress(&window, &committing);
+        assert!(!window.get_cancel_allowed());
+        assert!(
+            window
+                .get_launcher_detail()
+                .contains("отмена временно недоступна")
+        );
+        render(&window, &adapter, "preparation-committing");
         crate::apply_launcher_state(&window, &controller.core.subscribe_state().borrow());
 
         // The error dialog includes process output immediately, then appends
@@ -938,6 +1121,13 @@ mod tests {
             &diagnostic,
             "Этап: Игра запущена\nMinecraft 1.21.1 • NeoForge 21.1.248 • Java 21",
         );
+        diagnostics.set_guidance(
+            &window,
+            Some(&launcher_core::LauncherFailure::GameExit { code: Some(23) }),
+            &diagnostic,
+        );
+        assert!(window.get_diagnostics_repair_action());
+        window.set_retry_available(true);
         assert!(window.get_diagnostics_visible());
         assert!(
             window
@@ -946,7 +1136,25 @@ mod tests {
         );
         pump_until(&events, || !window.get_diagnostics_refreshing());
         assert!(window.get_diagnostics_text().contains(&sample_log));
+        assert!(!window.get_diagnostics_details_visible());
+        render(&window, &adapter, "diagnostics-summary");
+        click(&window, 220.0, 266.0);
+        assert!(window.get_diagnostics_details_visible());
         render(&window, &adapter, "diagnostics-crash");
+        diagnostics.set_guidance(
+            &window,
+            Some(&launcher_core::LauncherFailure::LaunchOptions),
+            &diagnostic,
+        );
+        assert!(window.get_diagnostics_memory_action());
+        assert!(!window.get_diagnostics_repair_action());
+        window.set_diagnostics_details_visible(false);
+        render(&window, &adapter, "diagnostics-memory");
+        click(&window, 440.0, 266.0);
+        assert!(window.get_settings_visible());
+        assert!(!window.get_diagnostics_visible());
+        window.invoke_memory_back_requested();
+        window.invoke_diagnostics_requested();
         click(&window, 992.0, 673.0);
         assert!(!window.get_diagnostics_visible());
         assert!(window.get_diagnostics_available());

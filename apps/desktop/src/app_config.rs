@@ -104,6 +104,7 @@ impl ApplicationPaths {
     }
 }
 
+#[derive(Clone)]
 pub struct DesktopAppConfig {
     pub backend: LauncherBackendConfig,
     pub paths: ApplicationPaths,
@@ -111,6 +112,20 @@ pub struct DesktopAppConfig {
 }
 
 impl DesktopAppConfig {
+    #[cfg(test)]
+    pub fn for_test(root: &Path, backend: &str) -> Self {
+        Self {
+            backend: LauncherBackendConfig::new(backend.parse().unwrap()).unwrap(),
+            paths: ApplicationPaths {
+                root: root.to_owned(),
+                game: root.join("game"),
+                state: root.join("state"),
+                logs: root.join("logs"),
+            },
+            java_installer_url: String::new(),
+        }
+    }
+
     pub fn load() -> Result<Self, AppConfigError> {
         let values = EnvironmentValues::from_process()?;
         let executable = env::current_exe().map_err(AppConfigError::ExecutablePath)?;

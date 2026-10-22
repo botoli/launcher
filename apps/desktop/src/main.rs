@@ -81,10 +81,10 @@ impl DesktopConfigError {
     fn user_message(&self) -> String {
         match self {
             Self::InvalidUrl { .. } | Self::HttpClient { .. } => {
-                "Не удалось настроить сетевое подключение launcher".to_owned()
+                "Не удалось настроить сетевое подключение лаунчера".to_owned()
             }
             Self::ClientConfig { .. } => {
-                "Не удалось получить конфигурацию Minecraft с launcher server".to_owned()
+                "Не удалось получить конфигурацию Minecraft с сервера".to_owned()
             }
         }
     }
@@ -198,73 +198,162 @@ fn run() -> Result<(), DesktopError> {
     };
     runtime.spawn_blocking(self_update::cleanup_completed);
 
-    match runtime.block_on(configure_launcher(
-        runtime.handle(),
+    bind_launcher_startup(
+        &window,
+        runtime.handle().clone(),
         app_config,
         java_installer.setup(),
-    )) {
-        Ok(configured) => {
-            apply_static_display_state(&window, &configured.display);
-            // A saved offline nickname is not proof of ownership of a Telegram account.
-            let server_monitor = ServerMonitor::start(
-                &window,
-                runtime.handle(),
-                configured.client_config.server_address().unwrap_or(""),
-            );
-
-            let mut state_updates = configured.core.subscribe_state();
-            let initial_state = state_updates.borrow_and_update().clone();
-            apply_launcher_state(&window, &initial_state);
-
-            let profile_controller = Rc::new(configured.profile_controller);
-            let memory_controller = MemorySettingsController::new(
-                profile_controller.clone(),
-                configured.core.clone(),
-                &configured.client_config,
-            );
-            memory_controller.bind(&window);
-
-            let telegram = telegram_login::TelegramLogin::bind(
-                &window,
-                runtime.handle().clone(),
-                configured.telegram_gate,
-                configured.core.clone(),
-                configured.session_store,
-            );
-
-            bind_play_command(
-                &window,
-                configured.core.clone(),
-                runtime.handle().clone(),
-                profile_controller,
-                memory_controller.clone(),
-                diagnostics.clone(),
-                telegram.gate.clone(),
-            );
-            listen_for_state_updates(
-                &window,
-                state_updates,
-                runtime.handle(),
-                memory_controller,
-                diagnostics,
-                server_monitor,
-            );
-        }
-        Err(error) => {
-            tracing::error!(%error, "launcher configuration error");
-            apply_configuration_error(&window, &error.user_message());
-            diagnostics.show(
-                &window,
-                "Ошибка конфигурации",
-                &LauncherDiagnostic::from_error(&error),
-                "Получение конфигурации сборки при открытии лаунчера",
-            );
-        }
-    }
+        diagnostics,
+    );
 
     self_update::schedule_health_signal().map_err(DesktopError::UpdateStartup)?;
     window.run()?;
     Ok(())
+}
+
+// Until configuration succeeds, Retry owns only the bootstrap operation.
+// Successful binding replaces it with the normal Play/Repair retry handler.
+fn bind_launcher_startup(
+    window: &AppWindow,
+    runtime: Handle,
+    config: DesktopAppConfig,
+    java_setup: launcher_core::java_install::JavaSetup,
+    diagnostics: Rc<DiagnosticsController>,
+) {
+    let weak = window.as_weak();
+    window.on_retry_requested(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        if window.get_loading() || window.get_update_visible() || window.get_java_visible() {
+            return;
+        }
+        diagnostics.clear(&window);
+        apply_launch_pending(&window);
+        window.set_preparing(false);
+        window.set_launcher_status("Получение конфигурации".into());
+        window.set_launcher_detail("Подключаемся к серверу Nevermoreland…".into());
+        let task = runtime.spawn(configure_launcher_owned(
+            runtime.clone(),
+            config.clone(),
+            java_setup.clone(),
+        ));
+        let weak = window.as_weak();
+        let runtime = runtime.clone();
+        let diagnostics = diagnostics.clone();
+        slint::spawn_local(async move {
+            let result = task.await;
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            match result {
+                Ok(Ok(configured)) => {
+                    attach_configured_launcher(&window, runtime, configured, diagnostics)
+                }
+                result => {
+                    let (message, diagnostic) = match result {
+                        Ok(Err(error)) => {
+                            (error.user_message(), LauncherDiagnostic::from_error(&error))
+                        }
+                        Err(error) => (
+                            "Не удалось завершить настройку лаунчера".into(),
+                            LauncherDiagnostic::from_error(&error),
+                        ),
+                        Ok(Ok(_)) => unreachable!(),
+                    };
+                    tracing::error!(reason = %diagnostic.message, "launcher configuration error");
+                    apply_configuration_error(&window, &message);
+                    window.set_retry_available(true);
+                    diagnostics.show(
+                        &window,
+                        "Ошибка конфигурации",
+                        &diagnostic,
+                        "Получение конфигурации сборки при открытии лаунчера",
+                    );
+                    diagnostics.set_guidance(
+                        &window,
+                        Some(&LauncherFailure::ClientConfig),
+                        &diagnostic,
+                    );
+                }
+            }
+        })
+        .expect("UI event loop is available");
+    });
+    window.invoke_retry_requested();
+}
+
+async fn configure_launcher_owned(
+    runtime: Handle,
+    config: DesktopAppConfig,
+    java_setup: launcher_core::java_install::JavaSetup,
+) -> Result<ConfiguredLauncher, DesktopConfigError> {
+    configure_launcher(&runtime, config, java_setup).await
+}
+
+fn attach_configured_launcher(
+    window: &AppWindow,
+    runtime: Handle,
+    configured: ConfiguredLauncher,
+    diagnostics: Rc<DiagnosticsController>,
+) {
+    apply_static_display_state(window, &configured.display);
+    // A saved offline nickname is not proof of ownership of a Telegram account.
+    let server_monitor = ServerMonitor::start(
+        window,
+        &runtime,
+        configured.client_config.server_address().unwrap_or(""),
+    );
+
+    let mut state_updates = configured.core.subscribe_state();
+    let initial_state = state_updates.borrow_and_update().clone();
+    apply_launcher_state(window, &initial_state);
+
+    let profile_controller = Rc::new(configured.profile_controller);
+    let memory_controller = MemorySettingsController::new(
+        profile_controller.clone(),
+        configured.core.clone(),
+        &configured.client_config,
+    );
+    memory_controller.bind(window);
+    bind_repair_command(
+        window,
+        configured.core.clone(),
+        runtime.clone(),
+        diagnostics.clone(),
+    );
+    bind_preparation_commands(
+        window,
+        configured.core.clone(),
+        runtime.clone(),
+        diagnostics.clone(),
+    );
+
+    let telegram = telegram_login::TelegramLogin::bind(
+        window,
+        runtime.clone(),
+        configured.telegram_gate,
+        configured.core.clone(),
+        configured.session_store,
+    );
+
+    bind_play_command(
+        window,
+        configured.core.clone(),
+        runtime.clone(),
+        profile_controller,
+        memory_controller.clone(),
+        diagnostics.clone(),
+        telegram.gate.clone(),
+    );
+    listen_for_state_updates(
+        window,
+        state_updates,
+        &runtime,
+        memory_controller,
+        diagnostics.clone(),
+        server_monitor,
+    );
 }
 
 fn install_production_panic_hook() {
@@ -384,7 +473,16 @@ fn apply_static_display_state(window: &AppWindow, state: &DesktopDisplayState) {
 }
 
 fn apply_launcher_state(window: &AppWindow, state: &LauncherState) {
-    if state.status() == LauncherStatus::AuthenticationRequired {
+    let repairing = window.get_repairing();
+    let cancelled = window.get_cancel_pending()
+        && matches!(
+            state.status(),
+            LauncherStatus::Idle
+                | LauncherStatus::Ready
+                | LauncherStatus::AuthenticationRequired
+                | LauncherStatus::ProfileRequired
+        );
+    if state.status() == LauncherStatus::AuthenticationRequired && !cancelled {
         window.set_auth_play_pending(true);
         window.set_auth_verified(false);
         window.set_auth_visible(true);
@@ -499,6 +597,20 @@ fn apply_launcher_state(window: &AppWindow, state: &LauncherState) {
         }
     }
     let progress = state.progress().map(|value| value.clamp(0.0, 1.0));
+    if cancelled {
+        status_text = "Отменено".to_owned();
+        detail_text =
+            "Подготовка игры остановлена. Можно повторить запуск или восстановление".to_owned();
+    } else if repairing && state.status() == LauncherStatus::Ready {
+        status_text = "Восстановлено".to_owned();
+        detail_text = "Моды установлены заново. Личные настройки и миры сохранены".to_owned();
+    }
+    if !matches!(
+        state.status(),
+        LauncherStatus::Checking | LauncherStatus::Downloading
+    ) {
+        window.set_repairing(false);
+    }
     let progress_value = progress.unwrap_or_default();
     let progress_percent = (progress_value * 100.0).round() as i32;
     let loading = matches!(
@@ -536,6 +648,16 @@ fn apply_launcher_state(window: &AppWindow, state: &LauncherState) {
         .into(),
     );
     window.set_preparing(loading && state.status() != LauncherStatus::Running);
+    window.set_cancel_allowed(preparation_can_cancel(state));
+    window.set_retry_available(
+        state.status() == LauncherStatus::Error && window.get_repair_available(),
+    );
+    if !matches!(
+        state.status(),
+        LauncherStatus::Checking | LauncherStatus::Downloading | LauncherStatus::Launching
+    ) {
+        window.set_cancel_pending(false);
+    }
     if state.status() != LauncherStatus::Error
         && let Some(progress) = state.mods_progress()
     {
@@ -642,8 +764,8 @@ fn mods_progress_text(progress: &ModsSyncProgress) -> (String, String, String) {
             )
         }
         ModsSyncStage::Committing => (
-            "Сохранение модов".to_owned(),
-            "Обновление папки mods и сохранение версии набора".to_owned(),
+            "Завершаем установку…".to_owned(),
+            "Завершаем установку… Сохраняем моды; отмена временно недоступна".to_owned(),
             format!(
                 "Подготовлено {} файлов • {elapsed}",
                 progress.files_completed
@@ -666,6 +788,9 @@ fn mods_progress_text(progress: &ModsSyncProgress) -> (String, String, String) {
 }
 
 fn apply_mods_progress(window: &AppWindow, progress: &ModsSyncProgress) {
+    if progress.stage == ModsSyncStage::Committing {
+        window.set_cancel_allowed(false);
+    }
     let (status, detail, metrics) = mods_progress_text(progress);
     window.set_launcher_status(status.into());
     window.set_launcher_detail(detail.into());
@@ -723,6 +848,9 @@ fn launch_stage_text(stage: LauncherStage) -> (&'static str, &'static str) {
 }
 
 fn apply_launch_pending(window: &AppWindow) {
+    window.set_cancel_pending(false);
+    window.set_cancel_allowed(false);
+    window.set_retry_available(false);
     window.set_progress_metrics("".into());
     window.set_loading(true);
     window.set_preparing(true);
@@ -742,6 +870,8 @@ fn apply_client_config(window: &AppWindow, config: &ClientConfig) {
 }
 
 fn apply_configuration_error(window: &AppWindow, message: &str) {
+    window.set_cancel_pending(false);
+    window.set_cancel_allowed(false);
     window.set_progress_metrics("".into());
     window.set_launcher_status("Ошибка конфигурации".into());
     window.set_launcher_detail(message.into());
@@ -832,6 +962,7 @@ fn bind_play_command(
         tracing::info!("profile configured");
 
         diagnostics.clear(&window);
+        window.set_retry_repair(false);
         apply_launch_pending(&window);
 
         let core = core.clone();
@@ -859,6 +990,139 @@ fn bind_play_command(
                 );
             }
         });
+    });
+}
+
+fn bind_repair_command(
+    window: &AppWindow,
+    core: LauncherCore,
+    runtime: Handle,
+    diagnostics: Rc<DiagnosticsController>,
+) {
+    window.set_repair_available(true);
+    let weak = window.as_weak();
+    window.on_repair_requested(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        if !window.get_repair_available()
+            || window.get_loading()
+            || window.get_update_visible()
+            || window.get_java_visible()
+            || window.get_auth_visible()
+            || window.get_auth_busy()
+        {
+            return;
+        }
+        diagnostics.clear(&window);
+        window.set_auth_play_pending(false);
+        window.set_retry_repair(true);
+        apply_launch_pending(&window);
+        window.set_repairing(true);
+        window.set_news_visible(false);
+        window.set_launcher_status("Восстановление игры".into());
+        window.set_launcher_detail("Получение сборки и повторная установка модов".into());
+
+        let core = core.clone();
+        let task = runtime.spawn(async move { core.send_command(LauncherCommand::Repair).await });
+        let weak = weak.clone();
+        let diagnostics = diagnostics.clone();
+        let _ = slint::spawn_local(async move {
+            let failure = match task.await {
+                Ok(Ok(())) => return,
+                Ok(Err(error)) => LauncherDiagnostic::from_error(&error),
+                Err(error) => LauncherDiagnostic::from_error(&error),
+            };
+            tracing::error!(reason = %failure.message, "failed to send REPAIR command");
+            if let Some(window) = weak.upgrade() {
+                window.set_repairing(false);
+                window.set_repair_available(false);
+                apply_configuration_error(
+                    &window,
+                    "Обработчик восстановления недоступен. Перезапустите лаунчер.",
+                );
+                diagnostics.show(
+                    &window,
+                    "Ошибка восстановления",
+                    &failure,
+                    "Восстановление модов",
+                );
+            }
+        });
+    });
+}
+
+fn preparation_can_cancel(state: &LauncherState) -> bool {
+    matches!(
+        state.status(),
+        LauncherStatus::Checking | LauncherStatus::Downloading | LauncherStatus::Launching
+    ) && state.stage() != Some(LauncherStage::StartingProcess)
+        && state
+            .mods_progress()
+            .is_none_or(|progress| progress.stage != ModsSyncStage::Committing)
+}
+
+fn bind_preparation_commands(
+    window: &AppWindow,
+    core: LauncherCore,
+    runtime: Handle,
+    diagnostics: Rc<DiagnosticsController>,
+) {
+    let weak = window.as_weak();
+    window.on_cancel_requested(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        if !window.get_preparing()
+            || !window.get_cancel_allowed()
+            || window.get_cancel_pending()
+            || (window.get_java_visible() && !window.get_java_can_cancel())
+            || !preparation_can_cancel(&core.subscribe_state().borrow())
+        {
+            return;
+        }
+        window.set_cancel_pending(true);
+        window.set_launcher_detail("Отменяем подготовку игры…".into());
+        let core = core.clone();
+        let task = runtime
+            .spawn(async move { core.send_command(LauncherCommand::CancelPreparation).await });
+        let weak = weak.clone();
+        let diagnostics = diagnostics.clone();
+        let _ = slint::spawn_local(async move {
+            let failure = match task.await {
+                Ok(Ok(())) => return,
+                Ok(Err(error)) => LauncherDiagnostic::from_error(&error),
+                Err(error) => LauncherDiagnostic::from_error(&error),
+            };
+            if let Some(window) = weak.upgrade() {
+                window.set_cancel_pending(false);
+                apply_configuration_error(
+                    &window,
+                    "Не удалось отправить отмену. Перезапустите лаунчер.",
+                );
+                diagnostics.show(&window, "Ошибка отмены", &failure, "Отмена подготовки игры");
+            }
+        });
+    });
+    let weak = window.as_weak();
+    window.on_retry_requested(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        if !window.get_retry_available()
+            || window.get_loading()
+            || window.get_update_visible()
+            || window.get_java_visible()
+            || window.get_auth_visible()
+        {
+            return;
+        }
+        window.set_diagnostics_visible(false);
+        if window.get_retry_repair() {
+            window.invoke_repair_requested();
+        } else {
+            window.invoke_play_requested(window.get_nickname_input());
+        }
     });
 }
 

@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use launcher_core::{LauncherDiagnostic, LauncherState, LauncherStatus};
+use launcher_core::{LauncherDiagnostic, LauncherFailure, LauncherState, LauncherStatus};
 use slint::ComponentHandle;
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt},
@@ -43,6 +43,9 @@ impl DiagnosticsController {
         window.set_diagnostics_available(false);
         window.set_diagnostics_refreshing(false);
         window.set_diagnostics_text("".into());
+        window.set_diagnostics_details_visible(false);
+        window.set_diagnostics_memory_action(false);
+        window.set_diagnostics_repair_action(false);
     }
 
     pub fn observe_state(&self, window: &AppWindow, state: &LauncherState) {
@@ -67,6 +70,7 @@ impl DiagnosticsController {
             context.push_str(&format!("Операция: {operation}\n{detail}\n{metrics}\n"));
         }
         self.show(window, &window.get_launcher_status(), &diagnostic, &context);
+        self.set_guidance(window, state.failure(), &diagnostic);
     }
 
     pub fn show(
@@ -81,6 +85,8 @@ impl DiagnosticsController {
             text.push_str("\nПоследний вывод Minecraft:\n");
             text.push_str(&diagnostic.log_tail);
         }
+        self.set_guidance(window, None, diagnostic);
+        window.set_diagnostics_details_visible(false);
         self.prefix.replace(text.clone());
         window.set_diagnostics_summary(summary.into());
         window.set_diagnostics_text(text.into());
@@ -88,6 +94,19 @@ impl DiagnosticsController {
         window.set_settings_visible(false);
         window.set_diagnostics_visible(true);
         self.refresh(window);
+    }
+
+    pub fn set_guidance(
+        &self,
+        window: &AppWindow,
+        failure: Option<&LauncherFailure>,
+        diagnostic: &LauncherDiagnostic,
+    ) {
+        let guidance = guidance(failure, diagnostic);
+        window.set_diagnostics_reason(guidance.reason.into());
+        window.set_diagnostics_advice(guidance.advice.into());
+        window.set_diagnostics_memory_action(guidance.memory);
+        window.set_diagnostics_repair_action(guidance.repair);
     }
 
     fn refresh(&self, window: &AppWindow) {
@@ -168,6 +187,78 @@ impl DiagnosticsController {
     }
 }
 
+struct Guidance {
+    reason: &'static str,
+    advice: &'static str,
+    memory: bool,
+    repair: bool,
+}
+
+fn guidance(failure: Option<&LauncherFailure>, diagnostic: &LauncherDiagnostic) -> Guidance {
+    // Inspect only the current failure and process output, never an older launcher.log.
+    let text = format!("{}\n{}", diagnostic.message, diagnostic.log_tail).to_lowercase();
+    let memory = matches!(failure, Some(LauncherFailure::LaunchOptions))
+        || [
+            "outofmemoryerror",
+            "could not reserve enough space",
+            "native memory allocation",
+            "cannot allocate memory",
+        ]
+        .iter()
+        .any(|signal| text.contains(signal));
+    let (reason, advice, repair) = if memory {
+        (
+            "Не удалось выделить память для игры.",
+            "Откройте настройки ОЗУ и проверьте объём. При ошибке выделения уменьшите его и закройте лишние программы; при OutOfMemoryError во время игры увеличьте объём в доступных пределах.",
+            false,
+        )
+    } else {
+        match failure {
+            Some(LauncherFailure::Java { .. }) => (
+                "Не найдена подходящая Java.",
+                "Нажмите «Повторить», чтобы проверить Java снова. Если предложена установка — завершите её. Для ручной установки выберите требуемую версию Java x64; номер версии указан в заголовке ошибки и подробностях.",
+                false,
+            ),
+            Some(LauncherFailure::ClientConfig) => (
+                "Не удалось получить параметры сборки с сервера.",
+                "Проверьте интернет и адрес сервера в launcher-config.json рядом с лаунчером. Нажмите «Повторить»: конфигурация будет запрошена заново. Если ошибка повторяется, передайте логи поддержке.",
+                false,
+            ),
+            Some(LauncherFailure::ModsSync | LauncherFailure::Installation) => (
+                "Не удалось загрузить, проверить или сохранить игровые файлы.",
+                "Проверьте интернет, свободное место и доступ к папке игры. Повторите операцию. Для повторной установки модов используйте «Восстановить моды»; миры, скриншоты и личные настройки сохранятся.",
+                true,
+            ),
+            Some(LauncherFailure::AuthenticationVerification) => (
+                "Не удалось проверить вход на сервере.",
+                "Проверьте интернет и повторите запуск. Если сервер попросит войти снова, откройте аккаунт и подтвердите вход через Telegram.",
+                false,
+            ),
+            Some(LauncherFailure::UnsupportedLoader(_)) => (
+                "В сборке указан неподдерживаемый загрузчик.",
+                "Передайте логи поддержке Nevermoreland: параметры загрузчика должен исправить администратор сборки.",
+                false,
+            ),
+            Some(LauncherFailure::GameExit { .. } | LauncherFailure::GameLaunch) => (
+                "Minecraft не смог запуститься или завершился с ошибкой.",
+                "Раскройте подробности и посмотрите последние сообщения игры. При ошибке модов попробуйте восстановление; если сбой повторяется, передайте логи поддержке.",
+                true,
+            ),
+            _ => (
+                "Операцию не удалось завершить.",
+                "Повторите операцию. Если ошибка повторяется, раскройте подробности и скопируйте логи для поддержки.",
+                false,
+            ),
+        }
+    };
+    Guidance {
+        reason,
+        advice,
+        memory,
+        repair,
+    }
+}
+
 async fn read_launcher_tail(path: &Path) -> std::io::Result<String> {
     let mut file = tokio::fs::File::open(path).await?;
     let length = file.metadata().await?.len();
@@ -185,6 +276,27 @@ async fn read_launcher_tail(path: &Path) -> std::io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guidance_distinguishes_memory_java_files_and_config() {
+        let diagnostic = LauncherDiagnostic::message("request failed");
+        assert!(guidance(Some(&LauncherFailure::LaunchOptions), &diagnostic).memory);
+        let crash = LauncherDiagnostic {
+            message: "exit 1".into(),
+            log_tail: "java.lang.OutOfMemoryError: Java heap space".into(),
+        };
+        assert!(guidance(Some(&LauncherFailure::GameExit { code: Some(1) }), &crash).memory);
+        let java = guidance(
+            Some(&LauncherFailure::Java { required_major: 21 }),
+            &diagnostic,
+        );
+        assert!(java.reason.contains("Java"));
+        assert!(!java.repair);
+        assert!(guidance(Some(&LauncherFailure::ModsSync), &diagnostic).repair);
+        let config = guidance(Some(&LauncherFailure::ClientConfig), &diagnostic);
+        assert!(config.advice.contains("запрошена заново"));
+        assert!(!config.memory && !config.repair);
+    }
 
     #[tokio::test]
     async fn reads_only_the_tail_of_a_large_log_and_handles_missing_file() {

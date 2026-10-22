@@ -3,10 +3,19 @@ import { PixelButton } from "pixel-button.slint";
 import { ScrollView } from "std-widgets.slint";
 
 export component DiagnosticsPanel inherits Rectangle {
+    in property <string> reason;
+    in property <string> advice;
+    in property <bool> memory-action;
+    in property <bool> repair-action;
+    in-out property <bool> details-visible;
+    callback memory-requested();
+    callback repair-requested();
     in property <string> summary;
     in property <string> log-text;
     in property <string> log-path;
     in property <bool> refreshing;
+    in property <bool> retry-enabled;
+    callback retry-requested();
     callback close-requested();
     callback refresh-requested();
     callback open-folder-requested();
@@ -18,9 +27,24 @@ export component DiagnosticsPanel inherits Rectangle {
     VerticalLayout {
         padding: 26px;
         spacing: 14px;
-        Text { text: root.summary; color: Palette.frost; font-size: 27px; font-weight: 600; height: 40px; overflow: elide; }
-        Text { text: "Причина сбоя и последние строки логов. Текст можно выделить и скопировать."; color: Palette.muted; font-size: 14px; height: 24px; }
+        HorizontalLayout {
+            height: 40px;
+            spacing: 16px;
+            Text { text: root.summary; color: Palette.frost; font-size: 27px; font-weight: 600; overflow: elide; vertical-alignment: center; }
+            if root.retry-enabled: PixelButton { width: 128px; label: "Повторить"; label-font-size: 16px; clicked => { root.retry-requested(); } }
+        }
+        Text { text: root.reason; color: Palette.frost; font-size: 18px; wrap: word-wrap; }
+        Text { text: root.advice; color: Palette.muted; font-size: 15px; wrap: word-wrap; }
+        HorizontalLayout {
+            height: 40px;
+            spacing: 12px;
+            PixelButton { width: 230px; label: root.details-visible ? "Скрыть подробности" : "Показать подробности"; clicked => { root.details-visible = !root.details-visible; } }
+            if root.memory-action: PixelButton { width: 200px; label: "Настройки ОЗУ"; clicked => { root.memory-requested(); } }
+            if root.repair-action: PixelButton { width: 220px; label: "Восстановить моды"; clicked => { root.repair-requested(); } }
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+        }
         Rectangle {
+            visible: root.details-visible;
             vertical-stretch: 1;
             background: #100c09;
             border-width: 1px;
@@ -54,7 +78,7 @@ export component DiagnosticsPanel inherits Rectangle {
         HorizontalLayout {
             height: 44px;
             spacing: 12px;
-            PixelButton { width: 200px; label: "Скопировать логи"; clicked => { output.select-all(); output.copy(); } }
+            PixelButton { width: 200px; label: "Скопировать логи"; clicked => { root.details-visible = true; output.select-all(); output.copy(); } }
             PixelButton { width: 230px; label: "Открыть папку логов"; clicked => { root.open-folder-requested(); } }
             PixelButton { width: 170px; label: root.refreshing ? "Чтение..." : "Обновить"; button-enabled: !root.refreshing; clicked => { root.refresh-requested(); } }
             Rectangle { horizontal-stretch: 1; background: transparent; }

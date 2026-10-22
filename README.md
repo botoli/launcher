@@ -1,6 +1,6 @@
 # Equestrian Dream Launcher
 
-Версия: **0.1.9**
+Версия: **0.1.12**
 
 Настольный Minecraft-лаунчер проекта EquestrianDream для Windows, написанный на Rust и Slint.
 

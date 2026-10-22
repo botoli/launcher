@@ -76,6 +76,8 @@ export component SettingsPanel inherits Rectangle {
     in property <bool> memory-detected;
     in property <bool> memory-save-enabled;
     in property <string> installation-path;
+    in property <bool> repair-enabled;
+    callback repair-requested();
     callback input-edited(string);
     callback slider-changed(float);
     callback stepped(int);
@@ -99,7 +101,7 @@ export component SettingsPanel inherits Rectangle {
         }
         VerticalLayout {
             padding: 32px;
-            spacing: 24px;
+            spacing: 16px;
             Text {
                 text: "Настройки";
                 color: Palette.frost;
@@ -238,6 +240,24 @@ export component SettingsPanel inherits Rectangle {
                     overflow: elide;
                     height: 24px;
                     accessible-label: "Папка игры: " + root.installation-path;
+                }
+                HorizontalLayout {
+                    height: 44px;
+                    spacing: 16px;
+                    PixelButton {
+                        width: 300px;
+                        label: "Проверить и восстановить игру";
+                        label-font-size: 16px;
+                        button-enabled: root.repair-enabled;
+                        clicked => { root.repair-requested(); }
+                    }
+                    Text {
+                        text: "Моды будут скачаны заново.\nЛичные настройки и миры сохранятся.";
+                        color: Palette.muted;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                    }
                 }
             }
             Rectangle { vertical-stretch: 1; background: transparent; }

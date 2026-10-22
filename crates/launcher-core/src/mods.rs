@@ -286,6 +286,51 @@ pub async fn sync_mods<F>(
 where
     F: Fn(ModsSyncProgress) + Send + Sync + 'static,
 {
+    sync_mods_impl(
+        client,
+        config,
+        data_directory,
+        cancellation,
+        false,
+        on_progress,
+    )
+    .await
+}
+
+/// Reinstalls the managed mods directory even when the saved pack hash matches.
+/// Other game files are preserved; replacement uses the normal staging/rollback path.
+pub async fn reinstall_mods<F>(
+    client: &reqwest::Client,
+    config: &ClientConfig,
+    data_directory: &Path,
+    cancellation: &ModsSyncCancellation,
+    on_progress: F,
+) -> Result<ModsSyncOutcome, ModsSyncError>
+where
+    F: Fn(ModsSyncProgress) + Send + Sync + 'static,
+{
+    sync_mods_impl(
+        client,
+        config,
+        data_directory,
+        cancellation,
+        true,
+        on_progress,
+    )
+    .await
+}
+
+pub(crate) async fn sync_mods_impl<F>(
+    client: &reqwest::Client,
+    config: &ClientConfig,
+    data_directory: &Path,
+    cancellation: &ModsSyncCancellation,
+    force: bool,
+    on_progress: F,
+) -> Result<ModsSyncOutcome, ModsSyncError>
+where
+    F: Fn(ModsSyncProgress) + Send + Sync + 'static,
+{
     let mut reporter = ModsProgressReporter::new(on_progress);
     reporter.phase(ModsSyncStage::Checking);
     ensure_not_cancelled(cancellation)?;
@@ -298,7 +343,7 @@ where
 
     let state_path = data_directory.join(STATE_FILE_NAME);
     let local_state = read_local_state(&state_path).await?;
-    if local_state.mods_hash.as_deref() == Some(config.mods_hash.as_str()) {
+    if !force && local_state.mods_hash.as_deref() == Some(config.mods_hash.as_str()) {
         reporter.phase(ModsSyncStage::Unchanged);
         return Ok(ModsSyncOutcome::Unchanged);
     }
@@ -898,6 +943,113 @@ mod tests {
         assert_eq!(server.request_count("/mods.zip"), 1);
         assert_eq!(fs::read(root.path().join("mods/a.jar"))?, b"a");
         assert_eq!(read_hash(root.path())?, Some("hash-1".to_owned()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn forced_reinstall_restores_same_hash_and_preserves_personal_files()
+    -> Result<(), Box<dyn Error>> {
+        let server = TestServer::start().await?;
+        server.route(
+            "/mods.zip",
+            TestResponse::ok(zip_bytes(&[("mods/a.jar", b"a"), ("mods/b.jar", b"b")])?),
+        );
+        let root = TempDir::new()?;
+        let config = client_config(server.url("mods.zip")?, "same");
+        sync(&server, &config, &root).await?;
+        fs::remove_file(root.path().join("mods/a.jar"))?;
+        fs::write(root.path().join("mods/b.jar"), b"corrupt")?;
+        fs::write(root.path().join("mods/stale.jar"), b"stale")?;
+        let personal = [
+            "config/mod.toml",
+            "options.txt",
+            "saves/world/level.dat",
+            "screenshots/picture.png",
+            "servers.dat",
+        ];
+        for relative in personal {
+            let path = root.path().join(relative);
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::write(path, relative.as_bytes())?;
+        }
+        let result = reinstall_mods(
+            &build_http_client()?,
+            &config,
+            root.path(),
+            &ModsSyncCancellation::default(),
+            |_| {},
+        )
+        .await?;
+        assert_eq!(result, ModsSyncOutcome::Updated { files_installed: 2 });
+        assert_eq!(server.request_count("/mods.zip"), 2);
+        assert_eq!(fs::read(root.path().join("mods/a.jar"))?, b"a");
+        assert_eq!(fs::read(root.path().join("mods/b.jar"))?, b"b");
+        assert!(!root.path().join("mods/stale.jar").exists());
+        for relative in personal {
+            assert_eq!(fs::read(root.path().join(relative))?, relative.as_bytes());
+        }
+        assert_eq!(read_hash(root.path())?, Some("same".to_owned()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn forced_reinstall_failure_preserves_same_hash_and_working_mods()
+    -> Result<(), Box<dyn Error>> {
+        let server = TestServer::start().await?;
+        server.route("/mods.zip", TestResponse::ok(b"invalid zip".to_vec()));
+        let root = TempDir::new()?;
+        fs::create_dir(root.path().join("mods"))?;
+        fs::write(root.path().join("mods/old.jar"), b"old")?;
+        fs::write(root.path().join("state.json"), r#"{"modsHash":"same"}"#)?;
+        let error = reinstall_mods(
+            &build_http_client()?,
+            &client_config(server.url("mods.zip")?, "same"),
+            root.path(),
+            &ModsSyncCancellation::default(),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, ModsSyncError::InvalidArchive(_)));
+        assert_eq!(fs::read(root.path().join("mods/old.jar"))?, b"old");
+        assert_eq!(read_hash(root.path())?, Some("same".to_owned()));
+        assert_eq!(fs::read_dir(root.path())?.count(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn forced_reinstall_cancelled_extraction_preserves_same_hash_and_working_mods()
+    -> Result<(), Box<dyn Error>> {
+        let server = TestServer::start().await?;
+        server.route(
+            "/mods.zip",
+            TestResponse::ok(zip_bytes(&[("mods/a.jar", b"a"), ("mods/b.jar", b"b")])?),
+        );
+        let root = TempDir::new()?;
+        fs::create_dir(root.path().join("mods"))?;
+        fs::write(root.path().join("mods/old.jar"), b"old")?;
+        fs::write(root.path().join("state.json"), r#"{"modsHash":"same"}"#)?;
+        let cancellation = ModsSyncCancellation::default();
+        let cancel = cancellation.clone();
+        let error = reinstall_mods(
+            &build_http_client()?,
+            &client_config(server.url("mods.zip")?, "same"),
+            root.path(),
+            &cancellation,
+            move |event| {
+                if event.stage == ModsSyncStage::Extracting
+                    && event.current_file.as_deref() == Some("b.jar")
+                {
+                    cancel.cancel();
+                }
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, ModsSyncError::Cancelled));
+        assert_eq!(fs::read(root.path().join("mods/old.jar"))?, b"old");
+        assert_eq!(read_hash(root.path())?, Some("same".to_owned()));
+        assert_eq!(fs::read_dir(root.path())?.count(), 2);
         Ok(())
     }
 

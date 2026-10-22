@@ -233,8 +233,8 @@ pub(super) async fn run_java_setup(
                 }
             },
             command = commands.recv() => match command {
-                Some(LauncherCommand::Cancel) => return Some(WorkflowControl::Cancel),
-                Some(LauncherCommand::Play) => {},
+                Some(LauncherCommand::Cancel | LauncherCommand::CancelPreparation) => return Some(WorkflowControl::Cancel),
+                Some(LauncherCommand::Play | LauncherCommand::Repair) => {},
                 None => return Some(WorkflowControl::Stop),
             }
         }
@@ -395,14 +395,14 @@ where
                 };
             }
             command = commands.recv() => match command {
-                Some(LauncherCommand::Cancel) => {
+                Some(LauncherCommand::Cancel | LauncherCommand::CancelPreparation) => {
                     cancel();
                     if let Ok(Ok(process)) = launch_task.await {
                         cancel_and_reap(process).await;
                     }
                     return WorkflowControl::Cancel;
                 }
-                Some(LauncherCommand::Play) => {}
+                Some(LauncherCommand::Play | LauncherCommand::Repair) => {}
                 None => {
                     cancel();
                     if let Ok(Ok(process)) = launch_task.await {
@@ -470,7 +470,7 @@ async fn monitor_process(
                     cancel_requested = true;
                     process.cancel();
                 }
-                Some(LauncherCommand::Play) => {}
+                Some(LauncherCommand::Play | LauncherCommand::Repair | LauncherCommand::CancelPreparation) => {}
                 None => {
                     stop_requested = true;
                     process.cancel();
@@ -778,7 +778,12 @@ mod tests {
         core.send_command(LauncherCommand::Play).await.unwrap();
         wait_for_status(&mut states, LauncherStatus::Running).await;
         core.send_command(LauncherCommand::Play).await.unwrap();
+        core.send_command(LauncherCommand::Repair).await.unwrap();
+        core.send_command(LauncherCommand::CancelPreparation)
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(states.borrow().status(), LauncherStatus::Running);
         assert_eq!(calls.load(Ordering::Acquire), 1);
 
         core.send_command(LauncherCommand::Cancel).await.unwrap();

@@ -373,6 +373,71 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn core_cancels_a_stalled_auth_check_before_backend_downloads() {
+        use crate::http::test_support::{TestResponse, TestServer};
+        let server = TestServer::start().await.unwrap();
+        server.route(
+            "/api/auth/me",
+            TestResponse::slow(
+                r#"{"login":"tg_1","nickname":"Player","registrationStatus":"pending"}"#,
+                1,
+                Duration::from_secs(5),
+            ),
+        );
+        let base = server.url("").unwrap();
+        let client = reqwest::Client::new();
+        let gate = TelegramAuthGate::new(TelegramAuthClient::new(client.clone(), base.clone()));
+        let temp = tempfile::tempdir().unwrap();
+        let vanilla = crate::VanillaLaunchConfig {
+            telegram_auth: Some(gate.clone()),
+            heap_memory: None,
+            jvm_args: vec![],
+            version_id: "test".into(),
+            java_major_override: None,
+            server_address: None,
+            catalog_url: base.clone(),
+            assets_base_url: base.clone(),
+            runtime_root: temp.path().into(),
+            game_directory: temp.path().into(),
+            launcher_name: "test".into(),
+            launcher_version: "test".into(),
+        };
+        let game = crate::LauncherGameConfig::new(client.clone(), vanilla);
+        gate.set_session(Some(session()));
+        let core = crate::LauncherCore::new_backend_with_game(
+            &tokio::runtime::Handle::current(),
+            temp.path(),
+            client,
+            crate::LauncherBackendConfig::new(base).unwrap(),
+            game,
+        );
+        core.set_offline_profile(crate::OfflineProfile::new("Player").unwrap());
+        let mut states = core.subscribe_state();
+        core.send_command(crate::LauncherCommand::Play)
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while server.request_count("/api/auth/me") == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        core.send_command(crate::LauncherCommand::CancelPreparation)
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_millis(500), async {
+            while states.borrow().status() != crate::LauncherStatus::Idle {
+                states.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("cancellation must not wait for the auth HTTP timeout");
+        assert_eq!(server.request_count("/api/client-config"), 0);
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
     async fn core_requires_session_before_any_backend_downloads() {
         let (base, request) = mock(
             r#"{"login":"tg_1","nickname":"Player","registrationStatus":"pending"}"#,

@@ -9,8 +9,15 @@ export component ProgressPanel inherits Rectangle {
     in property <bool> has-progress;
     in property <bool> loading;
     in property <bool> show-diagnostics;
+    in property <bool> show-cancel;
+    in property <bool> cancel-enabled;
+    in property <bool> cancel-pending;
+    in property <bool> show-retry;
     in property <float> u: 1;
     callback diagnostics-clicked();
+    callback cancel-clicked();
+    callback retry-clicked();
+    private property <length> actions-width: (root.show-diagnostics ? 90px * root.u : 0px) + (root.show-cancel || root.show-retry ? 122px * root.u : 0px);
     background: transparent;
     Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: #bfa38433; }
     Rectangle { x: 0px; y: 27px * root.u; width: 13px * root.u; height: 13px * root.u; border-radius: 7px; background: root.loading ? Palette.moss : root.show-diagnostics ? #e18c6e : #70d928; }
@@ -20,7 +27,7 @@ export component ProgressPanel inherits Rectangle {
     }
     track := Rectangle {
         x: 216px * root.u; y: 28px * root.u;
-        width: parent.width - self.x - (root.show-diagnostics ? 90px * root.u : 0px); height: 14px * root.u;
+        width: max(0px, parent.width - self.x - root.actions-width); height: 14px * root.u;
         background: #b6a18d20; border-width: 1px; border-color: #bfa38444; border-radius: 7px * root.u;
         clip: true;
         Rectangle {
@@ -32,6 +39,14 @@ export component ProgressPanel inherits Rectangle {
     private property <float> phase;
     Timer { interval: 32ms; running: root.loading && !root.has-progress; triggered => { root.phase = mod(root.phase + 4, 360); } }
     if root.show-diagnostics: PixelButton { x: parent.width - self.width; y: 18px * root.u; width: 80px * root.u; height: 30px * root.u; label: "Логи"; label-font-size: 14px * root.u; clicked => { root.diagnostics-clicked(); } }
+    if root.show-cancel || root.show-retry: PixelButton {
+        x: parent.width - root.actions-width; y: 18px * root.u;
+        width: 112px * root.u; height: 30px * root.u;
+        label: root.show-retry ? "Повторить" : root.cancel-pending ? "Отменяем…" : "Отменить";
+        label-font-size: 14px * root.u;
+        button-enabled: root.show-retry || root.cancel-enabled;
+        clicked => { if (root.show-retry) { root.retry-clicked(); } else { root.cancel-clicked(); } }
+    }
     if root.loading || root.show-diagnostics || root.detail-text != "": Text {
         x: 32px * root.u; y: 51px * root.u; width: parent.width - self.x; height: 22px * root.u;
         text: root.detail-text + (root.metrics-text != "" ? " · " + root.metrics-text : "") + (root.has-progress ? " · " + root.progress-percent + "%" : "");

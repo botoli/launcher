@@ -81,7 +81,7 @@ pub use minecraft::{
 };
 pub use mods::{
     MAX_EXTRACTED_MODS_SIZE, MAX_MODS_ZIP_ENTRIES, MAX_MODS_ZIP_SIZE, ModsSyncCancellation,
-    ModsSyncError, ModsSyncOutcome, ModsSyncProgress, ModsSyncStage, sync_mods,
+    ModsSyncError, ModsSyncOutcome, ModsSyncProgress, ModsSyncStage, reinstall_mods, sync_mods,
 };
 pub use process::{
     LaunchSpec, LaunchSpecError, ProcessCancellation, ProcessError, ProcessEvent, ProcessExit,
@@ -104,6 +104,10 @@ const CHECKING_DELAY: Duration = Duration::from_millis(250);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LauncherCommand {
     Play,
+    /// Restore managed game files without authentication or starting Minecraft.
+    Repair,
+    /// Cancel preparation, but never terminate an already running game.
+    CancelPreparation,
     Cancel,
 }
 
@@ -513,7 +517,9 @@ async fn run_actor(
 ) {
     while let Some(command) = commands.recv().await {
         match command {
-            LauncherCommand::Play if is_playable(states.borrow().status()) => {
+            LauncherCommand::Play | LauncherCommand::Repair
+                if is_playable(states.borrow().status()) =>
+            {
                 let resume_status = states.borrow().status();
 
                 let options = *launch_options.borrow();
@@ -523,6 +529,7 @@ async fn run_actor(
                     &offline_profiles,
                     &installation,
                     options,
+                    command == LauncherCommand::Repair,
                 )
                 .await
                 {
@@ -533,7 +540,10 @@ async fn run_actor(
                     WorkflowControl::Stop => return,
                 }
             }
-            LauncherCommand::Play | LauncherCommand::Cancel => {}
+            LauncherCommand::Play
+            | LauncherCommand::Repair
+            | LauncherCommand::CancelPreparation
+            | LauncherCommand::Cancel => {}
         }
     }
 }
@@ -544,6 +554,7 @@ async fn run_play_workflow(
     offline_profiles: &watch::Receiver<Option<OfflineProfile>>,
     installation: &Installation,
     options: UserLaunchOptions,
+    repair: bool,
 ) -> WorkflowControl {
     tracing::info!("checking pack");
     publish_state(
@@ -571,6 +582,7 @@ async fn run_play_workflow(
             installation,
             backend,
             options,
+            repair,
         )
         .await;
     }
@@ -707,6 +719,11 @@ async fn run_play_workflow(
         }
     }
 
+    if repair {
+        publish_state(states, LauncherState::new(LauncherStatus::Ready, Some(1.0)));
+        return WorkflowControl::Continue;
+    }
+
     let Some(game) = &installation.game else {
         publish_state(states, LauncherState::new(LauncherStatus::Ready, Some(1.0)));
         return WorkflowControl::Continue;
@@ -744,13 +761,28 @@ async fn run_backend_play_workflow(
     installation: &Installation,
     backend: &BackendInstallation,
     options: UserLaunchOptions,
+    repair: bool,
 ) -> WorkflowControl {
     if let Some(gate) = installation
         .game
         .as_ref()
+        .filter(|_| !repair)
         .and_then(|g| g.vanilla.telegram_auth.as_ref())
     {
-        match gate.verify().await {
+        let verification = gate.verify();
+        tokio::pin!(verification);
+        let verified = loop {
+            tokio::select! {
+                biased;
+                command = commands.recv() => match command {
+                    Some(LauncherCommand::Cancel | LauncherCommand::CancelPreparation) => return WorkflowControl::Cancel,
+                    Some(LauncherCommand::Play | LauncherCommand::Repair) => {},
+                    None => return WorkflowControl::Stop,
+                },
+                result = &mut verification => break result,
+            }
+        };
+        match verified {
             Ok(user) => {
                 if offline_profiles
                     .borrow()
@@ -807,6 +839,7 @@ async fn run_backend_play_workflow(
     let configured_game = match installation
         .game
         .as_ref()
+        .filter(|_| !repair)
         .map(|game| game.for_client_config(&config, options))
         .transpose()
     {
@@ -836,6 +869,7 @@ async fn run_backend_play_workflow(
         &backend.client,
         &config,
         &installation.root_dir,
+        repair,
     )
     .await
     {
@@ -866,6 +900,11 @@ async fn run_backend_play_workflow(
             return WorkflowControl::Continue;
         }
         ModsSyncStep::Stop => return WorkflowControl::Stop,
+    }
+
+    if repair {
+        publish_state(states, LauncherState::new(LauncherStatus::Ready, Some(1.0)));
+        return WorkflowControl::Continue;
     }
 
     let loader = if let Some(loader) = BackendLoader::parse(&config.loader) {
@@ -936,8 +975,8 @@ async fn fetch_client_config_or_receive_control(
         tokio::select! {
             result = &mut fetch => return ClientConfigStep::Finished(Box::new(result)),
             command = commands.recv() => match command {
-                Some(LauncherCommand::Cancel) => return ClientConfigStep::Cancel,
-                Some(LauncherCommand::Play) => {}
+                Some(LauncherCommand::Cancel | LauncherCommand::CancelPreparation) => return ClientConfigStep::Cancel,
+                Some(LauncherCommand::Play | LauncherCommand::Repair) => {}
                 None => return ClientConfigStep::Stop,
             }
         }
@@ -950,6 +989,7 @@ async fn sync_mods_or_receive_control(
     client: &reqwest::Client,
     config: &ClientConfig,
     root_dir: &std::path::Path,
+    force: bool,
 ) -> ModsSyncStep {
     let client = client.clone();
     let config = config.clone();
@@ -958,11 +998,12 @@ async fn sync_mods_or_receive_control(
     let task_cancellation = cancellation.clone();
     let progress_states = states.clone();
     let mut task = tokio::spawn(async move {
-        sync_mods(
+        mods::sync_mods_impl(
             &client,
             &config,
             &root_dir,
             &task_cancellation,
+            force,
             move |progress| {
                 publish_state(
                     &progress_states,
@@ -982,12 +1023,21 @@ async fn sync_mods_or_receive_control(
                 };
             }
             command = commands.recv() => match command {
-                Some(LauncherCommand::Cancel) => {
+                Some(LauncherCommand::CancelPreparation)
+                    if states.borrow().mods_progress().is_some_and(|progress| {
+                        progress.stage == ModsSyncStage::Committing
+                    }) => {
+                        // Finish the atomic replacement before returning, but honor
+                        // a cancel click sent from the previous progress snapshot.
+                        let _task_result = task.await;
+                        return ModsSyncStep::Cancel;
+                    }
+                Some(LauncherCommand::Cancel | LauncherCommand::CancelPreparation) => {
                     cancellation.cancel();
                     let _task_result = task.await;
                     return ModsSyncStep::Cancel;
                 }
-                Some(LauncherCommand::Play) => {}
+                Some(LauncherCommand::Play | LauncherCommand::Repair) => {}
                 None => {
                     cancellation.cancel();
                     let _task_result = task.await;
@@ -1014,8 +1064,8 @@ async fn fetch_pack_manifest_or_receive_control(
                 tokio::select! {
                     result = &mut fetch => return ManifestStep::Finished(result),
                     command = commands.recv() => match command {
-                        Some(LauncherCommand::Cancel) => return ManifestStep::Cancel,
-                        Some(LauncherCommand::Play) => {}
+                        Some(LauncherCommand::Cancel | LauncherCommand::CancelPreparation) => return ManifestStep::Cancel,
+                        Some(LauncherCommand::Play | LauncherCommand::Repair) => {}
                         None => return ManifestStep::Stop,
                     }
                 }
@@ -1043,11 +1093,11 @@ async fn verify_manifest_or_receive_control(
                 };
             }
             command = commands.recv() => match command {
-                Some(LauncherCommand::Cancel) => {
+                Some(LauncherCommand::Cancel | LauncherCommand::CancelPreparation) => {
                     verification_task.abort();
                     return VerificationStep::Cancel;
                 }
-                Some(LauncherCommand::Play) => {}
+                Some(LauncherCommand::Play | LauncherCommand::Repair) => {}
                 None => {
                     verification_task.abort();
                     return VerificationStep::Stop;
@@ -1095,12 +1145,12 @@ async fn install_or_receive_control(
                 };
             }
             command = commands.recv() => match command {
-                Some(LauncherCommand::Cancel) => {
+                Some(LauncherCommand::Cancel | LauncherCommand::CancelPreparation) => {
                     cancellation.cancel();
                     let _task_result = install_task.await;
                     return InstallStep::Cancel;
                 }
-                Some(LauncherCommand::Play) => {}
+                Some(LauncherCommand::Play | LauncherCommand::Repair) => {}
                 None => {
                     cancellation.cancel();
                     let _task_result = install_task.await;
@@ -1122,8 +1172,8 @@ async fn wait_or_receive_control(
         tokio::select! {
             () = &mut delay => return WorkflowControl::Continue,
             command = commands.recv() => match command {
-                Some(LauncherCommand::Cancel) => return WorkflowControl::Cancel,
-                Some(LauncherCommand::Play) => {}
+                Some(LauncherCommand::Cancel | LauncherCommand::CancelPreparation) => return WorkflowControl::Cancel,
+                Some(LauncherCommand::Play | LauncherCommand::Repair) => {}
                 None => return WorkflowControl::Stop,
             }
         }
@@ -1324,6 +1374,7 @@ mod tests {
         core.send_command(LauncherCommand::Play).await.unwrap();
         wait_for_status(&mut states, LauncherStatus::Checking).await;
         core.send_command(LauncherCommand::Play).await.unwrap();
+        core.send_command(LauncherCommand::Repair).await.unwrap();
         advance_and_yield(CHECKING_DELAY).await;
         wait_for_status(&mut states, LauncherStatus::Ready).await;
 
@@ -1515,6 +1566,27 @@ mod tests {
         let state_json: serde_json::Value =
             serde_json::from_slice(&fs::read(installation.path().join("state.json"))?)?;
         assert_eq!(state_json["modsHash"], "backend-hash");
+
+        // Repair runs without a profile, ignores launch-only heap/loader validation,
+        // fetches current config and never proceeds to runtime/Java/game launch.
+        fs::remove_file(installation.path().join("mods/backend.jar"))?;
+        core.set_launch_options(UserLaunchOptions {
+            max_memory_mib: Some(0),
+        });
+        core.send_command(LauncherCommand::Repair).await?;
+        let repaired = tokio::time::timeout(
+            Duration::from_secs(5),
+            wait_for_status(&mut states, LauncherStatus::Ready),
+        )
+        .await?;
+        assert_eq!(repaired.failure(), None);
+        assert_eq!(
+            fs::read(installation.path().join("mods/backend.jar"))?,
+            b"backend mod"
+        );
+        assert_eq!(server.request_count("/api/client-config"), 2);
+        assert_eq!(server.request_count("/mods.zip"), 2);
+        assert_eq!(server.request_count("/catalog.json"), 0);
         Ok(())
     }
 

@@ -40,6 +40,12 @@ export component AppWindow inherits Window {
     in property <bool> play-enabled;
     in property <string> play-label: "Играть";
     in property <bool> preparing;
+    in property <bool> repairing;
+    in property <bool> repair-available;
+    in property <bool> cancel-allowed;
+    in property <bool> cancel-pending;
+    in property <bool> retry-available;
+    in property <bool> retry-repair;
     in-out property <bool> auth-play-pending;
     in-out property <bool> settings-visible;
     in-out property <bool> news-visible;
@@ -57,6 +63,11 @@ export component AppWindow inherits Window {
     in-out property <bool> diagnostics-visible;
     in property <bool> diagnostics-available;
     in property <bool> diagnostics-refreshing;
+    in property <string> diagnostics-reason;
+    in property <string> diagnostics-advice;
+    in property <bool> diagnostics-memory-action;
+    in property <bool> diagnostics-repair-action;
+    in-out property <bool> diagnostics-details-visible;
     in property <string> diagnostics-summary;
     in property <string> diagnostics-text;
     in property <string> launcher-log-path;
@@ -87,6 +98,9 @@ export component AppWindow inherits Window {
 
     callback play-requested(string);
     callback settings-requested();
+    callback repair-requested();
+    callback cancel-requested();
+    callback retry-requested();
     callback move-window(float, float);
     callback memory-input-edited(string);
     callback memory-slider-changed(float);
@@ -200,6 +214,12 @@ export component AppWindow inherits Window {
                         metrics-text: root.progress-metrics;
                         progress: root.progress; progress-percent: root.progress-percent; has-progress: root.has-progress;
                         show-diagnostics: root.diagnostics-available && !root.update-visible;
+                        show-cancel: root.preparing;
+                        cancel-enabled: root.cancel-allowed && !root.cancel-pending && (!root.java-visible || root.java-can-cancel);
+                        cancel-pending: root.cancel-pending;
+                        show-retry: root.retry-available;
+                        cancel-clicked => { root.cancel-requested(); }
+                        retry-clicked => { root.retry-requested(); }
                         diagnostics-clicked => { root.diagnostics-requested(); }
                     }
                 }
@@ -224,6 +244,8 @@ export component AppWindow inherits Window {
                 memory-detected: root.memory-detected;
                 memory-save-enabled: root.memory-save-enabled;
                 installation-path: root.installation-path;
+                repair-enabled: root.repair-available && !root.loading && !root.update-visible && !root.java-visible;
+                repair-requested => { root.repair-requested(); }
                 input-edited(value) => { root.memory-input-edited(value); }
                 slider-changed(value) => { root.memory-slider-changed(value); }
                 stepped(direction) => { root.memory-stepped(direction); }
@@ -241,6 +263,15 @@ export component AppWindow inherits Window {
                 log-text: root.diagnostics-text;
                 log-path: root.launcher-log-path;
                 refreshing: root.diagnostics-refreshing;
+                reason: root.diagnostics-reason;
+                advice: root.diagnostics-advice;
+                details-visible <=> root.diagnostics-details-visible;
+                memory-action: root.diagnostics-memory-action && !root.loading;
+                repair-action: root.diagnostics-repair-action && root.repair-available && !root.loading;
+                memory-requested => { root.diagnostics-visible = false; root.settings-requested(); }
+                repair-requested => { root.repair-requested(); }
+                retry-enabled: root.retry-available && !root.loading;
+                retry-requested => { root.retry-requested(); }
                 close-requested => { root.diagnostics-close-requested(); }
                 refresh-requested => { root.diagnostics-refresh-requested(); }
                 open-folder-requested => { root.logs-folder-requested(); }
