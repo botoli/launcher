@@ -2821,7 +2821,7 @@ dependencies = [
 
 [[package]]
 name = "launcher-core"
-version = "0.1.13"
+version = "0.1.25"
 dependencies = [
  "fastnbt",
  "md-5",
@@ -2843,7 +2843,7 @@ dependencies = [
 
 [[package]]
 name = "launcher-desktop"
-version = "0.1.13"
+version = "0.1.25"
 dependencies = [
  "atomic-write-file",
  "ico",
@@ -2867,7 +2867,7 @@ dependencies = [
 
 [[package]]
 name = "launcher-shared"
-version = "0.1.13"
+version = "0.1.25"
 
 [[package]]
 name = "lazy_static"

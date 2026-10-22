@@ -8,7 +8,7 @@ use std::{
 };
 
 const MAX_SERVER_LIST_BYTES: u64 = 16 * 1024 * 1024;
-const PROJECT_NAME: &str = "Equestrian Dream";
+const PROJECT_NAME: &str = "Nevermore";
 
 pub(super) async fn prepare_server_list(config: &VanillaLaunchConfig) -> io::Result<()> {
     let Some(address) = config

@@ -1,0 +1,83 @@
+import { AssetCatalog } from "../theme/assets.slint";
+
+component PortalTile inherits Rectangle {
+    in property <int> tile-column;
+    in property <int> tile-row;
+    in property <int> columns;
+    in property <bool> hovered;
+    in property <bool> pressed;
+    in property <bool> focused;
+    in property <int> animation-frame;
+    // Empty corner cells keep the asymmetric, stepped silhouette transparent.
+    private property <int> inset: root.tile-row == 0 ? 4 : root.tile-row == 7 ? 3
+        : root.tile-row == 1 ? 2 : root.tile-row == 6 ? 1 : 0;
+    private property <bool> occupied: root.tile-column >= root.inset && root.tile-column < root.columns - root.inset;
+    private property <bool> frame: root.tile-row == 0 || root.tile-row == 7
+        || root.tile-column < (root.tile-row == 1 || root.tile-row == 6 ? 4 : 2)
+        || root.tile-column >= root.columns - (root.tile-row == 1 || root.tile-row == 6 ? 4 : 2);
+    private property <bool> crying: (root.tile-row == 0 && (root.tile-column == 7 || root.tile-column == root.columns - 9))
+        || (root.tile-row == 7 && (root.tile-column == 11 || root.tile-column == root.columns - 6))
+        || (root.tile-column == 1 && root.tile-row == 3)
+        || (root.tile-column == root.columns - 2 && root.tile-row == 4);
+    background: transparent;
+
+    if root.occupied: Image {
+        width: root.width; height: root.height;
+        source: !root.frame ? AssetCatalog.nether-portal
+            : root.crying ? AssetCatalog.crying-obsidian : AssetCatalog.obsidian;
+        source-clip-y: root.frame ? 0 : root.animation-frame * 8;
+        source-clip-width: root.frame ? 16 : 8;
+        source-clip-height: root.frame ? 16 : 8;
+        image-fit: fill; image-rendering: pixelated;
+    }
+    if root.occupied && root.frame: Rectangle {
+        width: root.width; height: root.height;
+        // Use a stone tint for interaction instead of drawn lines or borders.
+        background: root.pressed ? #10091F60 : root.focused ? #B594D655
+            : root.hovered ? #70558D38 : #70558D20;
+    }
+    if root.occupied && !root.frame: Rectangle {
+        width: root.width; height: root.height;
+        background: root.pressed ? #19082CB0 : #17062677;
+        if root.hovered && !root.pressed: Rectangle {
+            width: parent.width; height: parent.height; background: #BD80FF12;
+        }
+    }
+}
+
+// A single 20fps clock advances the whole portal, preserving the GIF timing.
+export component PortalSurface inherits Rectangle {
+    in property <bool> hovered;
+    in property <bool> pressed;
+    in property <bool> focused;
+    in property <bool> animated: true;
+    private property <int> animation-frame: 0;
+    private property <length> tile-size: 8px;
+    private property <int> columns: round(root.width / root.tile-size);
+    background: transparent;
+    Timer {
+        interval: 50ms; running: root.animated;
+        triggered => { root.animation-frame = mod(root.animation-frame + 1, 30); }
+    }
+
+    for index in root.columns * 8: PortalTile {
+        tile-column: mod(index, root.columns); tile-row: floor(index / root.columns);
+        columns: root.columns;
+        x: self.tile-column * root.tile-size; y: self.tile-row * root.tile-size;
+        width: root.tile-size; height: root.tile-size;
+        hovered: root.hovered; pressed: root.pressed; focused: root.focused;
+        animation-frame: root.animation-frame;
+    }
+    // Offset capstones break up the long edges, like a chipped ruined arch.
+    for index in 4: Rectangle {
+        x: index == 0 ? 48px : index == 1 ? root.width - 72px
+            : index == 2 ? 80px : root.width - 56px;
+        y: index < 2 ? -4px : root.height - 4px;
+        width: 8px; height: 8px; background: #251832;
+        Image {
+            width: parent.width; height: parent.height;
+            source: index == 1 ? AssetCatalog.crying-obsidian : AssetCatalog.obsidian;
+            image-fit: fill; image-rendering: pixelated;
+        }
+    }
+}

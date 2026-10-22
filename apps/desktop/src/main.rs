@@ -2,6 +2,7 @@
 
 mod app_config;
 mod diagnostics;
+mod i18n;
 mod java_install;
 mod logging;
 mod memory_settings;
@@ -141,7 +142,7 @@ fn main() -> ExitCode {
 
             #[cfg(not(debug_assertions))]
             platform::show_error_message(
-                "Equestrian Dream Launcher",
+                "Nevermore Launcher",
                 "Не удалось запустить launcher. Подробности сохранены в launcher.log.",
             );
 
@@ -162,16 +163,20 @@ fn run() -> Result<(), DesktopError> {
         SingleInstanceState::Acquired(guard) => guard,
         SingleInstanceState::AlreadyRunning => {
             tracing::warn!("launcher startup stopped because another instance is already running");
-            platform::show_error_message(
-                "Equestrian Dream Launcher",
-                "Equestrian Dream Launcher уже запущен.",
-            );
+            platform::show_error_message("Nevermore Launcher", "Nevermore Launcher уже запущен.");
             return Ok(());
         }
     };
 
     let runtime = tokio::runtime::Runtime::new()?;
     let window = AppWindow::new()?;
+    i18n::bind(
+        &window,
+        app_config
+            .paths
+            .settings_file()
+            .with_file_name("language.json"),
+    );
     let diagnostics = DiagnosticsController::new(runtime.handle().clone(), app_config.paths.logs());
     diagnostics.bind(&window);
     apply_static_display_state(&window, &DesktopDisplayState::default());
@@ -232,7 +237,7 @@ fn bind_launcher_startup(
         apply_launch_pending(&window);
         window.set_preparing(false);
         window.set_launcher_status("Получение конфигурации".into());
-        window.set_launcher_detail("Подключаемся к серверу Nevermoreland…".into());
+        window.set_launcher_detail("Подключаемся к серверу Nevermore…".into());
         let task = runtime.spawn(configure_launcher_owned(
             runtime.clone(),
             config.clone(),
@@ -372,7 +377,7 @@ fn install_production_panic_hook() {
             "launcher terminated because of an unexpected panic"
         );
         platform::show_error_message(
-            "Equestrian Dream Launcher",
+            "Nevermore Launcher",
             "Произошла непредвиденная ошибка. Подробности сохранены в launcher.log.",
         );
     }));
@@ -452,7 +457,7 @@ fn vanilla_launch_config(
         })?,
         runtime_root: data_directory.to_owned(),
         game_directory: data_directory.to_owned(),
-        launcher_name: "EquestrianDreamLauncher".to_owned(),
+        launcher_name: "Nevermore".to_owned(),
         launcher_version: env!("CARGO_PKG_VERSION").to_owned(),
     })
 }

@@ -1,9 +1,9 @@
-Equestrian Dream Launcher 0.1.13
+Nevermore Launcher 0.1.25
 
 Запуск
-1. Распакуйте папку EquestrianDreamLauncher в любое удобное место.
+1. Распакуйте папку Nevermore в любое удобное место.
 2. Установите 64-битную Java 21, если она ещё не установлена.
-3. Запустите EquestrianDreamLauncher.exe.
+3. Запустите Nevermore.exe.
 
 Вход через Telegram
 Нажмите «Войти и играть», выберите Telegram, затем «Открыть бота». При первом входе выберите
@@ -15,7 +15,7 @@ Equestrian Dream Launcher 0.1.13
 Бот и backend настраиваются владельцем проекта; серверные секреты в EXE не входят.
 
 Подключение к серверу
-После запуска Minecraft откройте «Сетевая игра» и выберите «Equestrian Dream».
+После запуска Minecraft откройте «Сетевая игра» и выберите «Nevermore».
 Адрес из конфигурации лаунчера добавляется в список автоматически.
 Подключение начинается только по вашему выбору в Minecraft.
 
@@ -85,13 +85,13 @@ Minecraft. «Обновить» перечитывает launcher.log, «Ско�
 
 Данные
 Все загруженные файлы и настройки находятся в:
-%LOCALAPPDATA%\EquestrianDreamLauncher
+%LOCALAPPDATA%\Nevermore
 
-Minecraft: %LOCALAPPDATA%\EquestrianDreamLauncher\game
-Настройки: %LOCALAPPDATA%\EquestrianDreamLauncher\state
-Логи:     %LOCALAPPDATA%\EquestrianDreamLauncher\logs
+Minecraft: %LOCALAPPDATA%\Nevermore\game
+Настройки: %LOCALAPPDATA%\Nevermore\state
+Логи:     %LOCALAPPDATA%\Nevermore\logs
 Главный log-файл:
-%LOCALAPPDATA%\EquestrianDreamLauncher\logs\launcher.log
+%LOCALAPPDATA%\Nevermore\logs\launcher.log
 
 Backend
 Адрес задаётся в launcher-config.json рядом с EXE:

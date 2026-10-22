@@ -1,3 +1,4 @@
+import { I18n } from "../i18n.slint";
 import { AssetCatalog } from "../theme/assets.slint";
 import { Palette } from "../theme/palette.slint";
 
@@ -15,7 +16,7 @@ component ChromeButton inherits FocusScope {
         if (event.text == Key.Return || event.text == " ") { root.clicked(); return accept; } reject
     }
     Rectangle {
-        background: area.pressed ? #563c29 : area.has-hover ? (root.destructive ? #70372c : #ffffff12) : transparent;
+        background: area.pressed ? Palette.panel-raised : area.has-hover ? (root.destructive ? #70372c : #ffffff12) : transparent;
         border-width: root.has-focus ? 1px : 0px; border-color: Palette.leaf;
         if root.show-icon: Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 26px; height: 26px; source: root.icon; image-fit: contain; }
         if !root.show-icon: Text { text: root.glyph; color: Palette.frost; font-size: 26px; horizontal-alignment: center; vertical-alignment: center; }
@@ -34,8 +35,8 @@ export component TitleBar inherits Rectangle {
     callback settings-clicked(); callback account-clicked();
     callback minimize-clicked(); callback close-clicked(); callback move-requested(float, float);
     private property <float> u: root.height / 74px;
-    background: #100c09c9;
-    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: #bfa38430; }
+    background: #15101Eee;
+    Rectangle { y: parent.height - 1px; height: 1px; background: #CEB5FF24; }
     TouchArea {
         width: parent.width - 410px * root.u; height: parent.height;
         moved => { if (self.pressed) { root.move-requested((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px); } }
@@ -43,32 +44,31 @@ export component TitleBar inherits Rectangle {
     Image { x: 59px * root.u; y: 19px * root.u; width: 32px * root.u; height: 40px * root.u; source: AssetCatalog.brand-mark; image-fit: contain; }
     Text {
         x: 110px * root.u; height: parent.height;
-        text: "NEVERMORELAND"; font-size: 22px * root.u; font-weight: 700;
+        text: "NEVERMORE"; font-size: 22px * root.u; font-weight: 700;
         letter-spacing: 2px * root.u; color: Palette.frost; vertical-alignment: center;
     }
     account := FocusScope {
         x: parent.width - 400px * root.u; width: 160px * root.u; height: parent.height;
         enabled: root.nickname-enabled; accessible-role: button;
-        accessible-label: root.auth-verified ? "Открыть аккаунт " + root.nickname : "Войти в аккаунт";
+        accessible-label: root.auth-verified ? I18n.tr("Открыть аккаунт ") + root.nickname : I18n.tr("Войти в аккаунт");
         key-pressed(event) => { if (event.text == Key.Return || event.text == " ") { root.account-clicked(); return accept; } reject }
         Rectangle {
-            background: area.pressed ? #5a3c2633 : area.has-hover || root.account-active ? #ffffff10 : transparent;
+            background: area.pressed ? #B89AEF33 : area.has-hover || root.account-active ? #B89AEF18 : transparent;
             border-width: account.has-focus ? 1px : 0px; border-color: Palette.leaf;
         }
         Rectangle {
             x: 12px * root.u; y: 16px * root.u; width: 44px * root.u; height: 44px * root.u;
-            background: #27180e; border-color: #b87d45; border-width: 1px; border-radius: 6px;
+            background: Palette.panel-raised; border-color: Palette.bronze; border-width: 1px; border-radius: 8px;
             Image { x: 3px; y: 3px; width: parent.width - 6px; height: parent.height - 6px; source: AssetCatalog.avatar; image-fit: contain; }
         }
         Text {
             x: 70px * root.u; width: parent.width - self.x - 5px; height: parent.height;
-            text: root.auth-verified ? root.nickname : "Войти"; color: Palette.frost;
+            text: root.auth-verified ? root.nickname : I18n.tr("Войти"); color: Palette.frost;
             font-size: 18px * root.u; vertical-alignment: center; overflow: elide;
         }
         area := TouchArea { enabled: root.nickname-enabled; mouse-cursor: pointer; clicked => { account.focus(); root.account-clicked(); } }
     }
-    for i in 3: Rectangle { x: parent.width - (248px - i * 92px) * root.u; y: 16px * root.u; width: 1px; height: parent.height - 32px * root.u; background: #bfa38418; }
-    ChromeButton { x: parent.width - 248px * root.u; width: 92px * root.u; height: parent.height; label: "Настройки"; show-icon: true; icon: AssetCatalog.settings-warm; available: root.settings-enabled; clicked => { root.settings-clicked(); } }
-    ChromeButton { x: parent.width - 156px * root.u; width: 80px * root.u; height: parent.height; label: "Свернуть"; glyph: "−"; clicked => { root.minimize-clicked(); } }
-    ChromeButton { x: parent.width - 76px * root.u; width: 76px * root.u; height: parent.height; label: "Закрыть"; glyph: "×"; destructive: true; clicked => { root.close-clicked(); } }
+    ChromeButton { x: parent.width - 248px * root.u; width: 92px * root.u; height: parent.height; label: I18n.tr("Настройки"); show-icon: true; icon: AssetCatalog.settings-warm; available: root.settings-enabled; clicked => { root.settings-clicked(); } }
+    ChromeButton { x: parent.width - 156px * root.u; width: 80px * root.u; height: parent.height; label: I18n.tr("Свернуть"); glyph: "−"; clicked => { root.minimize-clicked(); } }
+    ChromeButton { x: parent.width - 76px * root.u; width: 76px * root.u; height: parent.height; label: I18n.tr("Закрыть"); glyph: "×"; destructive: true; clicked => { root.close-clicked(); } }
 }

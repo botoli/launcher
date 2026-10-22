@@ -4,8 +4,8 @@ use ico::{IconDir, IconDirEntry, IconImage, ResourceType};
 use image::{DynamicImage, GenericImage, ImageBuffer, Rgba, imageops::FilterType};
 use slint_build::{CompilerConfiguration, EmbedResourcesKind};
 
-const APPLICATION_NAME: &str = "Equestrian Dream Launcher";
-const EXECUTABLE_NAME: &str = "EquestrianDreamLauncher.exe";
+const APPLICATION_NAME: &str = "Nevermore Launcher";
+const EXECUTABLE_NAME: &str = "Nevermore.exe";
 const ICON_SOURCE: &str = "../../assets/launcher_ico-Photoroom.png";
 const ICON_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
 
@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(windows)]
 fn compile_windows_resources() -> Result<(), Box<dyn Error>> {
     let out_directory = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
-    let icon_path = out_directory.join("EquestrianDreamLauncher.ico");
+    let icon_path = out_directory.join("Nevermore.ico");
     generate_windows_icon(&icon_path)?;
 
     let version = env::var("CARGO_PKG_VERSION")?;
@@ -40,7 +40,7 @@ fn compile_windows_resources() -> Result<(), Box<dyn Error>> {
         .set_icon(icon_path)
         .set("ProductName", APPLICATION_NAME)
         .set("FileDescription", APPLICATION_NAME)
-        .set("InternalName", "EquestrianDreamLauncher")
+        .set("InternalName", "Nevermore")
         .set("OriginalFilename", EXECUTABLE_NAME)
         .set("ProductVersion", &windows_version)
         .set("FileVersion", &windows_version)

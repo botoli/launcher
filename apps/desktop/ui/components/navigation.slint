@@ -1,31 +1,64 @@
+import { I18n } from "../i18n.slint";
+import { PixelButton } from "pixel-button.slint";
 import { Palette } from "../theme/palette.slint";
+import { AssetCatalog } from "../theme/assets.slint";
+
 component NavItem inherits FocusScope {
     in property <string> label;
+    in property <image> icon;
     in property <bool> selected;
     in property <bool> available: true;
-    in property <float> u: 1;
     callback clicked();
     enabled: root.available;
     opacity: root.available ? 1 : 0.48;
     accessible-role: button; accessible-label: root.label;
     key-pressed(event) => { if (event.text == Key.Return || event.text == " ") { root.clicked(); return accept; } reject }
-    Rectangle { background: area.pressed ? #ffffff12 : area.has-hover ? #ffffff08 : transparent; }
-    Text { text: root.label; font-size: 18px * root.u; color: root.selected ? Palette.leaf : Palette.muted; horizontal-alignment: center; vertical-alignment: center; }
-    Rectangle { x: 0px; y: parent.height - 3px; width: parent.width; height: 3px; background: root.selected || root.has-focus ? Palette.leaf : transparent; }
+    Rectangle {
+        x: 12px; width: parent.width - 24px; height: parent.height;
+        border-radius: 9px;
+        background: area.pressed ? #B89AEF30 : root.selected ? #B89AEF20 : area.has-hover ? #B89AEF10 : transparent;
+        border-width: root.has-focus ? 1px : 0px; border-color: Palette.leaf;
+    }
+    Rectangle { x: 0px; y: 9px; width: 3px; height: parent.height - 18px; border-radius: 2px; background: root.selected ? Palette.leaf : transparent; }
+    Image { x: 28px; y: (parent.height - self.height) / 2; width: 23px; height: 23px; source: root.icon; image-fit: contain; opacity: root.selected ? 1 : 0.65; }
+    Text {
+        x: 66px; width: parent.width - self.x - 18px; height: parent.height;
+        text: root.label; font-size: 16px; font-weight: root.selected ? 600 : 400;
+        color: root.selected ? Palette.leaf : Palette.muted; vertical-alignment: center;
+    }
     area := TouchArea { enabled: root.available; mouse-cursor: root.available ? pointer : default; clicked => { root.focus(); root.clicked(); } }
 }
+
 export component Navigation inherits Rectangle {
-    in property <float> u: 1;
     in property <bool> available: true;
     in property <bool> news-selected;
-    callback home-clicked(); callback news-clicked(); callback settings-clicked();
-    background: transparent;
-    Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: #bfa38420; }
-    HorizontalLayout {
-        x: 0px; y: 0px; width: parent.width; height: parent.height;
-        spacing: 32px * root.u;
-        NavItem { width: 98px * root.u; label: "Главная"; selected: !root.news-selected; u: root.u; available: root.available; clicked => { root.home-clicked(); } }
-        NavItem { width: 98px * root.u; label: "Новости"; selected: root.news-selected; u: root.u; available: root.available; clicked => { root.news-clicked(); } }
-        NavItem { width: 124px * root.u; label: "Настройки"; u: root.u; available: root.available; clicked => { root.settings-clicked(); } }
+    in property <string> version;
+    callback home-clicked(); callback news-clicked();
+    background: #15101Ef2;
+    Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: #CEB5FF24; }
+    VerticalLayout {
+        x: 0px; y: 26px; width: parent.width; height: 114px; spacing: 10px;
+        NavItem { label: I18n.tr("Главная"); icon: @image-url("../../../../assets/icons/nav-home.svg"); selected: !root.news-selected; available: root.available; clicked => { root.home-clicked(); } }
+        NavItem { label: I18n.tr("Новости"); icon: @image-url("../../../../assets/icons/nav-news.svg"); selected: root.news-selected; available: root.available; clicked => { root.news-clicked(); } }
     }
+    Text {
+        x: 28px; y: parent.height - 188px; width: parent.width - 56px; height: 24px;
+        text: I18n.tr("Язык"); color: Palette.muted; font-size: 13px;
+    }
+    HorizontalLayout {
+        x: 24px; y: parent.height - 156px; width: parent.width - 48px; height: 36px; spacing: 8px;
+        PixelButton {
+            label: "RU"; primary: !I18n.english; label-font-size: 14px;
+            accessible-label: "Русский"; button-enabled: root.available;
+            clicked => { I18n.select-language(false); }
+        }
+        PixelButton {
+            label: "EN"; primary: I18n.english; label-font-size: 14px;
+            accessible-label: "English"; button-enabled: root.available;
+            clicked => { I18n.select-language(true); }
+        }
+    }
+    Image { x: 28px; y: parent.height - 77px; width: 26px; height: 26px; source: AssetCatalog.version-icon; image-fit: contain; }
+    Text { x: 68px; y: parent.height - 84px; width: parent.width - 80px; height: 23px; text: "Minecraft"; color: Palette.muted; font-size: 14px; }
+    Text { x: 68px; y: parent.height - 61px; width: parent.width - 80px; height: 23px; text: root.version; color: Palette.frost; font-size: 14px; overflow: elide; }
 }

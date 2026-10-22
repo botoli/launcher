@@ -1,0 +1,9 @@
+// Display language is independent of launcher operations and source diagnostics.
+export global I18n {
+    in-out property <bool> english: false;
+    pure callback translate(string) -> string;
+    callback select-language(bool);
+    public pure function tr(source: string) -> string {
+        return self.english ? self.translate(source) : source;
+    }
+}

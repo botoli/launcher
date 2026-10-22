@@ -11,7 +11,7 @@ use std::{
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 
-pub const EXECUTABLE: &str = "EquestrianDreamLauncher.exe";
+pub const EXECUTABLE: &str = "Nevermore.exe";
 pub const README: &str = "README.txt";
 pub const MAX_ARCHIVE_SIZE: u64 = 256 * 1024 * 1024;
 const MAX_EXTRACTED_SIZE: u64 = 512 * 1024 * 1024;
@@ -106,10 +106,7 @@ impl UpdateClient {
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(10))
                 .read_timeout(Duration::from_secs(30))
-                .user_agent(concat!(
-                    "EquestrianDreamLauncher/",
-                    env!("CARGO_PKG_VERSION")
-                ))
+                .user_agent(concat!("Nevermore/", env!("CARGO_PKG_VERSION")))
                 .build()?,
             base,
         })
@@ -618,10 +615,7 @@ mod tests {
         x86[68..70].copy_from_slice(&0x14cu16.to_le_bytes());
         for bytes in [
             zip(&[("../outside.exe", &pe()), (README, b"readme")]),
-            zip(&[
-                ("folder/EquestrianDreamLauncher.exe", &pe()),
-                (README, b"readme"),
-            ]),
+            zip(&[("folder/Nevermore.exe", &pe()), (README, b"readme")]),
             zip(&[(EXECUTABLE, &pe())]),
             zip(&[
                 (EXECUTABLE, &pe()),

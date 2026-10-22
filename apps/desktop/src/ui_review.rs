@@ -120,16 +120,16 @@ fn native_window_review() {
                         .to_logical(window.window().scale_factor());
                     original_position.set(position);
                     window.window().dispatch_event(WindowEvent::PointerPressed {
-                        position: LogicalPosition::new(450., 20.),
+                        position: LogicalPosition::new(600., 20.),
                         button: PointerEventButton::Left,
                     });
                     window.window().dispatch_event(WindowEvent::PointerMoved {
-                        position: LogicalPosition::new(470., 40.),
+                        position: LogicalPosition::new(620., 40.),
                     });
                     window
                         .window()
                         .dispatch_event(WindowEvent::PointerReleased {
-                            position: LogicalPosition::new(470., 40.),
+                            position: LogicalPosition::new(620., 40.),
                             button: PointerEventButton::Left,
                         });
                 }
@@ -160,9 +160,10 @@ fn native_window_review() {
                         .set_size(slint::LogicalSize::new(1180., 787.));
                 }
                 10 => {
-                    click(&window, 600., 575.);
+                    click(&window, 1000., 657.);
                     assert_eq!(plays.get(), 1, "Play is connected");
                     window.set_loading(true);
+                    window.set_preparing(true);
                     window.set_has_progress(true);
                     window.set_progress(0.42);
                     window.set_progress_percent(42);

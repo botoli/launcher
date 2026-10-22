@@ -1,3 +1,4 @@
+import { I18n } from "../i18n.slint";
 import { Palette } from "../theme/palette.slint";
 import { PixelButton } from "pixel-button.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -20,7 +21,7 @@ export component DiagnosticsPanel inherits Rectangle {
     callback refresh-requested();
     callback open-folder-requested();
 
-    background: #17110df8;
+    background: Palette.panel;
     border-width: 3px;
     border-color: #bd6048;
     border-radius: 3px;
@@ -30,23 +31,23 @@ export component DiagnosticsPanel inherits Rectangle {
         HorizontalLayout {
             height: 40px;
             spacing: 16px;
-            Text { text: root.summary; color: Palette.frost; font-size: 27px; font-weight: 600; overflow: elide; vertical-alignment: center; }
-            if root.retry-enabled: PixelButton { width: 128px; label: "Повторить"; label-font-size: 16px; clicked => { root.retry-requested(); } }
+            Text { text: I18n.tr(root.summary); color: Palette.frost; font-size: 27px; font-weight: 600; overflow: elide; vertical-alignment: center; }
+            if root.retry-enabled: PixelButton { width: 128px; label: I18n.tr("Повторить"); label-font-size: 16px; clicked => { root.retry-requested(); } }
         }
-        Text { text: root.reason; color: Palette.frost; font-size: 18px; wrap: word-wrap; }
-        Text { text: root.advice; color: Palette.muted; font-size: 15px; wrap: word-wrap; }
+        Text { text: I18n.tr(root.reason); color: Palette.frost; font-size: 18px; wrap: word-wrap; }
+        Text { text: I18n.tr(root.advice); color: Palette.muted; font-size: 15px; wrap: word-wrap; }
         HorizontalLayout {
             height: 40px;
             spacing: 12px;
-            PixelButton { width: 230px; label: root.details-visible ? "Скрыть подробности" : "Показать подробности"; clicked => { root.details-visible = !root.details-visible; } }
-            if root.memory-action: PixelButton { width: 200px; label: "Настройки ОЗУ"; clicked => { root.memory-requested(); } }
-            if root.repair-action: PixelButton { width: 220px; label: "Восстановить моды"; clicked => { root.repair-requested(); } }
+            PixelButton { width: 230px; label: root.details-visible ? I18n.tr("Скрыть подробности") : I18n.tr("Показать подробности"); clicked => { root.details-visible = !root.details-visible; } }
+            if root.memory-action: PixelButton { width: 200px; label: I18n.tr("Настройки ОЗУ"); clicked => { root.memory-requested(); } }
+            if root.repair-action: PixelButton { width: 220px; label: I18n.tr("Восстановить моды"); clicked => { root.repair-requested(); } }
             Rectangle { horizontal-stretch: 1; background: transparent; }
         }
         Rectangle {
             visible: root.details-visible;
             vertical-stretch: 1;
-            background: #100c09;
+            background: Palette.ink;
             border-width: 1px;
             border-color: Palette.outline;
             ScrollView {
@@ -66,7 +67,7 @@ export component DiagnosticsPanel inherits Rectangle {
                     single-line: false;
                     read-only: true;
                     wrap: word-wrap;
-                    accessible-label: "Подробности ошибки и логи";
+                    accessible-label: I18n.tr("Подробности ошибки и логи");
                     key-pressed(event) => {
                         if (event.text == Key.Escape) { root.close-requested(); return accept; }
                         reject
@@ -78,11 +79,11 @@ export component DiagnosticsPanel inherits Rectangle {
         HorizontalLayout {
             height: 44px;
             spacing: 12px;
-            PixelButton { width: 200px; label: "Скопировать логи"; clicked => { root.details-visible = true; output.select-all(); output.copy(); } }
-            PixelButton { width: 230px; label: "Открыть папку логов"; clicked => { root.open-folder-requested(); } }
-            PixelButton { width: 170px; label: root.refreshing ? "Чтение..." : "Обновить"; button-enabled: !root.refreshing; clicked => { root.refresh-requested(); } }
+            PixelButton { width: 200px; label: I18n.tr("Скопировать логи"); clicked => { root.details-visible = true; output.select-all(); output.copy(); } }
+            PixelButton { width: 230px; label: I18n.tr("Открыть папку логов"); clicked => { root.open-folder-requested(); } }
+            PixelButton { width: 170px; label: root.refreshing ? I18n.tr("Чтение...") : I18n.tr("Обновить"); button-enabled: !root.refreshing; clicked => { root.refresh-requested(); } }
             Rectangle { horizontal-stretch: 1; background: transparent; }
-            PixelButton { width: 128px; label: "Закрыть"; clicked => { root.close-requested(); } }
+            PixelButton { width: 128px; label: I18n.tr("Закрыть"); clicked => { root.close-requested(); } }
         }
     }
 }

@@ -236,7 +236,7 @@ fn guidance(failure: Option<&LauncherFailure>, diagnostic: &LauncherDiagnostic) 
             ),
             Some(LauncherFailure::UnsupportedLoader(_)) => (
                 "В сборке указан неподдерживаемый загрузчик.",
-                "Передайте логи поддержке Nevermoreland: параметры загрузчика должен исправить администратор сборки.",
+                "Передайте логи поддержке Nevermore: параметры загрузчика должен исправить администратор сборки.",
                 false,
             ),
             Some(LauncherFailure::GameExit { .. } | LauncherFailure::GameLaunch) => (

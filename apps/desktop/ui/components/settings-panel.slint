@@ -1,3 +1,4 @@
+import { I18n } from "../i18n.slint";
 import { PixelButton } from "pixel-button.slint";
 import { Palette } from "../theme/palette.slint";
 
@@ -11,7 +12,7 @@ component MemorySlider inherits FocusScope {
     enabled: root.slider-enabled;
     opacity: root.slider-enabled ? 1 : 0.45;
     accessible-role: slider;
-    accessible-label: "Память Minecraft";
+    accessible-label: I18n.tr("Память Minecraft");
     accessible-value: root.value;
     private property <float> fraction: root.maximum <= root.minimum ? 0 : clamp((root.value - root.minimum) / (root.maximum - root.minimum), 0, 1);
     key-pressed(event) => {
@@ -103,7 +104,7 @@ export component SettingsPanel inherits Rectangle {
             padding: 32px;
             spacing: 16px;
             Text {
-                text: "Настройки";
+                text: I18n.tr("Настройки");
                 color: Palette.frost;
                 font-size: 32px;
                 font-weight: 600;
@@ -123,13 +124,13 @@ export component SettingsPanel inherits Rectangle {
                         VerticalLayout {
                             spacing: 8px;
                             Text {
-                                text: "Оперативная память";
+                                text: I18n.tr("Оперативная память");
                                 color: Palette.frost;
                                 font-size: 24px;
                                 font-weight: 600;
                             }
                             Text {
-                                text: "Объём памяти для Minecraft";
+                                text: I18n.tr("Объём памяти для Minecraft");
                                 color: Palette.muted;
                                 font-size: 14px;
                             }
@@ -159,7 +160,7 @@ export component SettingsPanel inherits Rectangle {
                                 font-weight: 600;
                                 single-line: true;
                                 enabled: root.memory-detected;
-                                accessible-label: "Объём памяти в МБ";
+                                accessible-label: I18n.tr("Объём памяти в МБ");
                                 edited => { root.input-edited(self.text); }
                                 key-pressed(event) => {
                                     if (event.text == Key.UpArrow) { root.stepped(1); return accept; }
@@ -172,7 +173,7 @@ export component SettingsPanel inherits Rectangle {
                                 x: parent.width - 44px;
                                 width: 32px;
                                 height: parent.height;
-                                text: "МБ";
+                                text: I18n.tr("МБ");
                                 color: Palette.muted;
                                 font-size: 16px;
                                 vertical-alignment: center;
@@ -189,22 +190,22 @@ export component SettingsPanel inherits Rectangle {
                     }
                     HorizontalLayout {
                         height: 20px;
-                        Text { text: "1024 МБ"; color: Palette.muted; font-size: 14px; }
+                        Text { text: I18n.tr("1024 МБ"); color: Palette.muted; font-size: 14px; }
                         Text {
-                            text: root.memory-gib + " ГБ";
+                            text: root.memory-gib + I18n.tr(" ГБ");
                             color: Palette.frost;
                             font-size: 16px;
                             horizontal-alignment: center;
                         }
                         Text {
-                            text: root.memory-detected ? root.memory-maximum + " МБ" : "—";
+                            text: root.memory-detected ? root.memory-maximum + I18n.tr(" МБ") : "—";
                             color: Palette.muted;
                             font-size: 14px;
                             horizontal-alignment: right;
                         }
                     }
                     Text {
-                        text: root.memory-error != "" ? root.memory-error : "Изменения применятся при следующем запуске игры.\nОбщее потребление памяти игрой может быть выше.";
+                        text: root.memory-error != "" ? I18n.tr(root.memory-error) : I18n.tr("Изменения применятся при следующем запуске игры.\nОбщее потребление памяти игрой может быть выше.");
                         color: root.memory-error != "" ? #ef9d84 : Palette.muted;
                         font-size: 14px;
                         wrap: word-wrap;
@@ -213,10 +214,10 @@ export component SettingsPanel inherits Rectangle {
                     if root.memory-suggestion != "": HorizontalLayout {
                         spacing: 16px;
                         height: 48px;
-                        Text { text: root.memory-suggestion; color: Palette.muted; font-size: 14px; wrap: word-wrap; vertical-alignment: center; }
+                        Text { text: I18n.tr(root.memory-suggestion); color: Palette.muted; font-size: 14px; wrap: word-wrap; vertical-alignment: center; }
                         PixelButton {
                             width: 196px;
-                            label: "Исправить значение";
+                            label: I18n.tr("Исправить значение");
                             label-font-size: 16px;
                             clicked => { root.suggestion-requested(); }
                         }
@@ -224,7 +225,7 @@ export component SettingsPanel inherits Rectangle {
                     if !root.memory-detected: PixelButton {
                         width: 224px;
                         height: 44px;
-                        label: "Определить память снова";
+                        label: I18n.tr("Определить память снова");
                         label-font-size: 16px;
                         clicked => { root.retry-requested(); }
                     }
@@ -232,27 +233,27 @@ export component SettingsPanel inherits Rectangle {
             }
             VerticalLayout {
                 spacing: 8px;
-                Text { text: "Папка игры"; color: Palette.frost; font-size: 16px; height: 24px; }
+                Text { text: I18n.tr("Папка игры"); color: Palette.frost; font-size: 16px; height: 24px; }
                 Text {
                     text: root.installation-path;
                     color: Palette.muted;
                     font-size: 14px;
                     overflow: elide;
                     height: 24px;
-                    accessible-label: "Папка игры: " + root.installation-path;
+                    accessible-label: I18n.tr("Папка игры: ") + root.installation-path;
                 }
                 HorizontalLayout {
                     height: 44px;
                     spacing: 16px;
                     PixelButton {
                         width: 300px;
-                        label: "Проверить и восстановить игру";
+                        label: I18n.tr("Проверить и восстановить игру");
                         label-font-size: 16px;
                         button-enabled: root.repair-enabled;
                         clicked => { root.repair-requested(); }
                     }
                     Text {
-                        text: "Моды будут скачаны заново.\nЛичные настройки и миры сохранятся.";
+                        text: I18n.tr("Моды будут скачаны заново.\nЛичные настройки и миры сохранятся.");
                         color: Palette.muted;
                         font-size: 13px;
                         wrap: word-wrap;
@@ -267,14 +268,14 @@ export component SettingsPanel inherits Rectangle {
                 spacing: 16px;
                 PixelButton {
                     width: 176px;
-                    label: "Отмена";
+                    label: I18n.tr("Отмена");
                     label-font-size: 16px;
                     clicked => { root.back-requested(); }
                 }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
                 PixelButton {
                     width: 224px;
-                    label: "Сохранить изменения";
+                    label: I18n.tr("Сохранить изменения");
                     label-font-size: 16px;
                     primary: true;
                     button-enabled: root.memory-save-enabled;

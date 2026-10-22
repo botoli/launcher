@@ -5,12 +5,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$releaseExecutable = Join-Path $repositoryRoot 'target\release\EquestrianDreamLauncher.exe'
+$releaseExecutable = Join-Path $repositoryRoot 'target\release\Nevermore.exe'
 $readmeSource = Join-Path $repositoryRoot 'packaging\README.txt'
 $configSource = Join-Path $repositoryRoot 'launcher-config.json'
 $distRoot = Join-Path $repositoryRoot 'dist'
-$outputDirectory = Join-Path $distRoot 'EquestrianDreamLauncher'
-$stagingDirectory = Join-Path $distRoot '.EquestrianDreamLauncher.staging'
+$outputDirectory = Join-Path $distRoot 'Nevermore'
+$stagingDirectory = Join-Path $distRoot '.Nevermore.staging'
 
 function Assert-PackagePaths {
     $allowedRoot = [IO.Path]::GetFullPath($distRoot).TrimEnd('\') + '\'
@@ -91,7 +91,7 @@ try {
     Move-Item -LiteralPath $stagingDirectory -Destination $outputDirectory
 
     $unexpectedFiles = Get-ChildItem -LiteralPath $outputDirectory -File |
-        Where-Object Name -NotIn @('EquestrianDreamLauncher.exe', 'README.txt', 'launcher-config.json')
+        Where-Object Name -NotIn @('Nevermore.exe', 'README.txt', 'launcher-config.json')
     if ($unexpectedFiles) {
         throw "Unexpected files were added to the distribution folder"
     }
@@ -100,10 +100,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Unable to read launcher version' }
     $metadata = $metadataText | ConvertFrom-Json
     $version = ($metadata.packages | Where-Object name -eq 'launcher-desktop').version
-    $zipPath = Join-Path $distRoot "EquestrianDreamLauncher-$version-windows-x64.zip"
+    $zipPath = Join-Path $distRoot "Nevermore-$version-windows-x64.zip"
     # Updates preserve the local backend config; their ZIP still contains only EXE/README.
     Compress-Archive -LiteralPath @(
-        (Join-Path $outputDirectory 'EquestrianDreamLauncher.exe'),
+        (Join-Path $outputDirectory 'Nevermore.exe'),
         (Join-Path $outputDirectory 'README.txt')
     ) -DestinationPath $zipPath -Force
     Write-Host "Release package created: $outputDirectory"

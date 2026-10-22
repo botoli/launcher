@@ -1,3 +1,4 @@
+import { I18n } from "../i18n.slint";
 import { Palette } from "../theme/palette.slint";
 import { PixelButton } from "pixel-button.slint";
 
@@ -15,11 +16,11 @@ export component JavaPanel inherits Rectangle {
     VerticalLayout {
         padding: 30px; spacing: 18px;
         Text {
-            text: root.error ? "Java не установлена" : "Java 21 для игры";
+            text: root.error ? I18n.tr("Java не установлена") : I18n.tr("Java 21 для игры");
             color: Palette.frost; font-family: "Trebuchet MS"; font-size: 28px;
         }
         Text {
-            text: root.message;
+            text: I18n.tr(root.message);
             color: root.error ? #ef9d84 : Palette.muted;
             font-size: 17px; wrap: word-wrap; vertical-stretch: 1;
         }
@@ -35,12 +36,12 @@ export component JavaPanel inherits Rectangle {
             height: 52px; spacing: 16px;
             if !root.busy: PixelButton {
                 horizontal-stretch: 2; primary: true; label-font-size: 18px;
-                label: root.error ? "Повторить" : "Скачать и установить";
+                label: root.error ? I18n.tr("Повторить") : I18n.tr("Скачать и установить");
                 clicked => { root.install-requested(); }
             }
             PixelButton {
                 horizontal-stretch: 1;
-                label: "Отмена";
+                label: I18n.tr("Отмена");
                 button-enabled: root.can-cancel;
                 clicked => { root.dismiss-requested(); }
             }

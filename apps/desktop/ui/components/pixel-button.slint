@@ -1,4 +1,33 @@
 import { Palette } from "../theme/palette.slint";
+import { PlaySparks } from "play-sparks.slint";
+import { PortalSurface } from "portal-surface.slint";
+
+component ButtonCaption inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> show-icon;
+    in property <bool> primary;
+    in property <bool> portal-style;
+    in property <length> label-font-size;
+    background: transparent;
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 12px; spacing: 12px; alignment: center;
+        if root.show-icon: Rectangle {
+            width: 24px; height: parent.height; background: transparent;
+            Image {
+                x: 0px; y: (parent.height - self.height) / 2;
+                width: 24px; height: 28px; source: root.icon; image-fit: contain;
+                colorize: root.portal-style ? Palette.frost : transparent;
+            }
+        }
+        Text {
+            text: root.label;
+            color: root.portal-style ? #FFF4FF : root.primary ? #201309 : Palette.frost;
+            font-size: root.label-font-size; font-weight: root.primary ? 700 : 500;
+            horizontal-alignment: center; vertical-alignment: center;
+        }
+    }
+}
 
 export component PixelButton inherits Rectangle {
     in property <string> label;
@@ -11,6 +40,68 @@ export component PixelButton inherits Rectangle {
     in property <length> label-font-size: root.primary ? 29px : 18px;
     in property <bool> asset-backed: false;
     in property <bool> button-enabled: true;
+    in property <bool> sparks: false;
+    in property <bool> portal-style: false;
+    // Focus survives activation/cancellation. Only the pointer may boost sparks.
+    private property <float> spark-heat: root.button-enabled && area.has-hover ? (area.pressed ? 1.2 : 1) : 0;
+    animate spark-heat { duration: 220ms; easing: ease-out; }
+    private property <bool> spring-active;
+    private property <duration> spring-start;
+    private property <float> spring-phase: root.spring-active
+        ? clamp((animation-tick() - root.spring-start) / 520ms, 0, 1) : 1;
+    private property <float> spring-wave: sin(root.spring-phase * 720deg)
+        * (1 - root.spring-phase) * (1 - root.spring-phase);
+    private property <bool> caption-ready;
+    private property <bool> caption-active;
+    private property <duration> caption-start;
+    private property <string> current-label;
+    private property <string> previous-label;
+    private property <bool> current-show-icon;
+    private property <bool> previous-show-icon;
+    private property <float> caption-phase: root.caption-active
+        ? clamp((animation-tick() - root.caption-start) / 240ms, 0, 1) : 1;
+    private property <float> caption-progress: root.caption-phase * root.caption-phase * (3 - 2 * root.caption-phase);
+
+    init => {
+        root.current-label = root.label;
+        root.current-show-icon = root.show-icon;
+        root.caption-ready = true;
+    }
+    changed label => { root.update-caption(); }
+    changed show-icon => { root.update-caption(); }
+    function update-caption() {
+        if (root.caption-ready && (root.current-label != root.label || root.current-show-icon != root.show-icon)) {
+            root.previous-label = root.current-label;
+            root.previous-show-icon = root.current-show-icon;
+            root.current-label = root.label;
+            root.current-show-icon = root.show-icon;
+            if (root.portal-style) {
+                root.caption-start = animation-tick();
+                root.caption-active = true;
+            }
+        }
+    }
+    function activate() {
+        if (root.button-enabled) {
+            if (root.portal-style) {
+                root.spring-start = animation-tick();
+                root.spring-active = true;
+            }
+            root.clicked();
+        }
+    }
+    // Time stamps allow rapid changes/clicks to retarget without stale timers.
+    Timer {
+        interval: 32ms; running: root.spring-active || root.caption-active;
+        triggered => {
+            if (root.spring-active && animation-tick() - root.spring-start >= 520ms) {
+                root.spring-active = false;
+            }
+            if (root.caption-active && animation-tick() - root.caption-start >= 240ms) {
+                root.caption-active = false;
+            }
+        }
+    }
 
     callback clicked();
 
@@ -19,25 +110,44 @@ export component PixelButton inherits Rectangle {
     accessible-label: root.label;
 
     opacity: root.button-enabled ? 1 : 0.48;
-    border-width: 1px;
-    border-color: keyboard.has-focus ? Palette.frost : root.primary ? #ffc17d : Palette.outline;
-    border-radius: 8px;
-    background: area.pressed ? (root.primary ? #df934e : #3b2c21)
-        : area.has-hover ? (root.primary ? #ffc17d : #35281f)
-        : (root.primary ? #ffb465 : #201813);
-    HorizontalLayout {
-        x: 0px; y: 0px; width: parent.width; height: parent.height;
-        padding-left: 12px; padding-right: 12px; spacing: 12px; alignment: center;
-        if root.show-icon: Rectangle {
-            width: 24px; height: parent.height; background: transparent;
-            Image { x: 0px; y: (parent.height - self.height) / 2; width: 24px; height: 28px; source: root.icon; image-fit: contain; }
+    animate opacity { duration: root.portal-style ? 180ms : 0ms; easing: ease-out; }
+    border-width: root.portal-style ? 0px : 1px;
+    border-color: keyboard.has-focus ? Palette.frost : root.primary ? #FFD19A : Palette.outline;
+    border-radius: root.portal-style ? 0px : 12px;
+    background: root.portal-style ? transparent : area.pressed ? (root.primary ? #E99845 : #3D2C50)
+        : area.has-hover ? (root.primary ? #FFC580 : #382A49)
+        : (root.primary ? Palette.pumpkin : Palette.panel-raised);
+    visual := Rectangle {
+        width: root.width; height: root.height; background: transparent;
+        // Transform the drawing, preserving the 8px grid and the fixed hit area.
+        transform-scale-x: 1 - 0.07 * root.spring-wave;
+        transform-scale-y: 1 - 0.12 * root.spring-wave;
+        if root.portal-style: PortalSurface {
+            width: parent.width; height: parent.height;
+            hovered: area.has-hover; pressed: area.pressed; focused: keyboard.has-focus;
+            animated: root.button-enabled;
         }
-        Text {
-            text: root.label;
-            color: root.primary ? #201309 : Palette.frost;
-            font-size: root.label-font-size;
-            font-weight: root.primary ? 700 : 500;
-            horizontal-alignment: center; vertical-alignment: center;
+        if root.caption-active: ButtonCaption {
+            y: -6px * root.caption-progress; width: parent.width; height: parent.height;
+            label: root.previous-label; show-icon: root.previous-show-icon;
+            icon: root.icon; primary: root.primary; portal-style: root.portal-style;
+            label-font-size: root.label-font-size;
+            opacity: 1 - root.caption-progress;
+            transform-scale: 1 - 0.04 * root.caption-progress;
+        }
+        ButtonCaption {
+            y: root.portal-style ? 6px * (1 - root.caption-progress) : 0px;
+            width: parent.width; height: parent.height;
+            label: root.portal-style ? root.current-label : root.label;
+            show-icon: root.portal-style ? root.current-show-icon : root.show-icon;
+            icon: root.icon; primary: root.primary; portal-style: root.portal-style;
+            label-font-size: root.label-font-size;
+            opacity: root.portal-style ? root.caption-progress : 1;
+            transform-scale: root.portal-style ? 0.96 + 0.04 * root.caption-progress : 1;
+        }
+        if root.sparks && root.button-enabled: PlaySparks {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            heat: root.spark-heat;
         }
     }
 
@@ -46,7 +156,7 @@ export component PixelButton inherits Rectangle {
         focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
-                root.clicked();
+                root.activate();
                 return accept;
             }
             reject
@@ -59,7 +169,7 @@ export component PixelButton inherits Rectangle {
         clicked => {
             if (root.button-enabled) {
                 keyboard.focus();
-                root.clicked();
+                root.activate();
             }
         }
     }

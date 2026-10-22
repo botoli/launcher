@@ -1,8 +1,9 @@
+import { I18n } from "i18n.slint";
 import { AssetCatalog } from "theme/assets.slint";
 import { Palette } from "theme/palette.slint";
 import { NewsPanel } from "components/news-panel.slint";
-import { Navigation } from "components/navigation.slint";
 import { Hero } from "components/hero.slint";
+import { Navigation } from "components/navigation.slint";
 import { TitleBar } from "components/title-bar.slint";
 import { MainPanel } from "components/main-panel.slint";
 import { ProgressPanel } from "components/progress-panel.slint";
@@ -28,7 +29,7 @@ export component AppWindow inherits Window {
     in property <string> server-address;
     in property <bool> server-online;
     in property <int> ping-ms: -1;
-    in property <string> server-status: "Проверка сервера";
+    in property <string> server-status: I18n.tr("Проверка сервера");
     in property <int> server-signal;
     in property <string> launcher-status;
     in property <string> launcher-detail;
@@ -38,7 +39,7 @@ export component AppWindow inherits Window {
     in property <bool> has-progress;
     in property <bool> loading;
     in property <bool> play-enabled;
-    in property <string> play-label: "Играть";
+    in property <string> play-label: I18n.tr("Играть");
     in property <bool> preparing;
     in property <bool> repairing;
     in property <bool> repair-available;
@@ -114,14 +115,17 @@ export component AppWindow inherits Window {
     callback diagnostics-refresh-requested();
     callback logs-folder-requested();
 
-    title: "Equestrian Dream Launcher";
+    title: "Nevermore Launcher";
     no-frame: true;
-    resize-border-width: 6px;
+    resize-border-width: 0px;
     preferred-width: 1180px;
     preferred-height: 787px;
-    min-width: 1000px;
-    min-height: 720px;
+    min-width: 1180px;
+    min-height: 787px;
+    max-width: 1180px;
+    max-height: 787px;
     private property <float> u: root.width / 1536px;
+    private property <length> sidebar-width: clamp(root.width * 0.155, 184px, 238px);
     background: Palette.ink;
     default-font-family: "Arial";
     default-font-size: 15px;
@@ -136,7 +140,7 @@ export component AppWindow inherits Window {
     Rectangle {
         width: parent.width;
         height: parent.height;
-        background: @linear-gradient(90deg, #100905dc 0%, #10090580 38%, #10090500 72%, #10090520 100%);
+        background: @linear-gradient(90deg, #15101Ed9 0%, #15101E99 30%, #15101E24 57%, #15101E00 78%);
     }
 
     VerticalLayout {
@@ -171,33 +175,37 @@ export component AppWindow inherits Window {
             vertical-stretch: 1;
             background: transparent;
 
-            if !root.settings-visible && !root.diagnostics-visible && !root.auth-visible: main-view := Rectangle {
-            background: transparent;
             Navigation {
-                x: 56px * root.u; y: 0px; width: 416px * root.u; height: 64px * root.u; u: root.u;
-                available: !root.loading && !root.update-visible && !root.java-visible;
+                x: 0px; y: 0px; width: root.sidebar-width; height: parent.height;
+                version: root.version;
+                available: !root.loading && !root.settings-visible && !root.diagnostics-visible && !root.auth-visible && !root.update-visible && !root.java-visible;
                 news-selected: root.news-visible;
                 home-clicked => { root.news-visible = false; }
                 news-clicked => { root.news-visible = true; }
-                settings-clicked => { root.settings-requested(); }
             }
+
+            if !root.settings-visible && !root.diagnostics-visible && !root.auth-visible: main-view := Rectangle {
+            x: root.sidebar-width; width: parent.width - self.x; height: parent.height;
+            background: transparent;
             if root.news-visible: NewsPanel {
-                x: 56px * root.u; y: 88px * root.u;
-                width: min(1080px, parent.width - 112px * root.u);
+                x: 32px; y: 28px;
+                width: parent.width - 64px;
                 height: parent.height - self.y - 32px;
             }
             if !root.news-visible: Rectangle {
                 width: parent.width; height: parent.height; background: transparent;
-                Hero {
-                    x: 80px * root.u; y: min(162px * root.u, parent.height * 0.18);
-                    width: 760px * root.u; height: 390px * root.u; u: min(root.u, (launch-surface.y - self.y - 24px) / 390px);
+                hero := Hero {
+                    x: 40px; y: max(24px, min(parent.height * 0.29 - 64px, launch-surface.y - self.height - 28px));
+                    width: parent.width - 80px; height: 180px * self.u;
+                    u: clamp(root.width / 1180px, 0.85, 1.18);
                 }
                 launch-surface := Rectangle {
-                    x: 54px * root.u; y: parent.height - self.height - 136px * root.u;
-                    width: 886px * root.u; height: (root.loading || root.diagnostics-available || root.memory-problem != "" ? 228px : 202px) * root.u;
-                    background: #130e09ee; border-width: 1px; border-color: #ac947069; border-radius: 12px * root.u;
+                    x: 32px; y: parent.height - self.height - 32px;
+                    width: parent.width - 64px;
+                    height: root.preparing ? 238px : root.loading || root.diagnostics-available || root.memory-problem != "" ? 192px : 154px;
+                    background: #1C1426ef; border-width: 1px; border-color: #B89AEF66; border-radius: 14px;
                     MainPanel {
-                        x: 0px; y: 0px; width: parent.width; height: 132px * root.u; u: root.u;
+                        x: 0px; y: 0px; width: parent.width; height: 106px; u: 1;
                         version: root.version; server-address: root.server-address;
                         server-online: root.server-online; ping-ms: root.ping-ms;
                         server-status: root.server-status; server-signal: root.server-signal;
@@ -206,10 +214,11 @@ export component AppWindow inherits Window {
                         play-label: root.play-label;
                         play-clicked => { root.play-requested(root.nickname-input); }
                     }
+                    Rectangle { x: 24px; y: 105px; width: parent.width - 48px; height: 1px; background: #B89AEF24; }
                     ProgressPanel {
-                        x: 35px * root.u; y: 132px * root.u; width: parent.width - 70px * root.u;
-                        height: parent.height - self.y; u: root.u;
-                        status-text: root.launcher-status; loading: root.loading;
+                        x: 24px; y: 114px; width: parent.width - 48px;
+                        height: parent.height - self.y; u: 1;
+                        status-text: !root.loading && root.play-enabled && root.memory-ready && !root.diagnostics-available ? I18n.tr("Всё готово к игре") : root.launcher-status; loading: root.preparing;
                         detail-text: root.memory-problem != "" ? root.memory-problem : root.loading || root.diagnostics-available ? root.launcher-detail : "";
                         metrics-text: root.progress-metrics;
                         progress: root.progress; progress-percent: root.progress-percent; has-progress: root.has-progress;
@@ -223,11 +232,7 @@ export component AppWindow inherits Window {
                         diagnostics-clicked => { root.diagnostics-requested(); }
                     }
                 }
-                Text {
-                    x: 56px * root.u; y: parent.height - 70px * root.u; width: parent.width - self.x; height: 28px * root.u;
-                    text: "Твой мир. Твои лошади. Твоя история.";
-                    color: Palette.muted; font-size: 16px * root.u;
-                }
+
             }
             }
             if root.settings-visible && !root.diagnostics-visible && !root.auth-visible: SettingsPanel {
@@ -334,3 +339,5 @@ export component AppWindow inherits Window {
     }
 
 }
+
+export { I18n }

@@ -12,7 +12,7 @@ pub(crate) const METADATA_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REDIRECTS: usize = 5;
-const USER_AGENT: &str = "EquestrianDreamLauncher/0.1";
+const USER_AGENT: &str = "Nevermore/0.1";
 
 pub fn build_http_client() -> Result<reqwest::Client, HttpClientBuildError> {
     build_http_client_with_read_timeout(HTTP_READ_TIMEOUT)

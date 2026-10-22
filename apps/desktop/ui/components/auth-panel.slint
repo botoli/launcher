@@ -1,3 +1,4 @@
+import { I18n } from "../i18n.slint";
 import { Palette } from "../theme/palette.slint";
 import { AssetCatalog } from "../theme/assets.slint";
 import { PixelButton } from "pixel-button.slint";
@@ -11,14 +12,14 @@ component ProviderCard inherits Rectangle {
     callback clicked();
     forward-focus: keyboard;
     accessible-role: button;
-    accessible-label: root.action + " через " + root.provider;
+    accessible-label: root.action + I18n.tr(" через ") + root.provider;
     opacity: root.button-enabled ? 1 : 0.55;
-    background: area.pressed ? #19120e : area.has-hover ? #35281f : #241c16;
+    background: area.pressed ? Palette.ink : area.has-hover ? Palette.panel-raised : Palette.panel;
     border-width: 2px;
-    border-color: keyboard.has-focus ? Palette.leaf : area.has-hover ? Palette.bronze : #574737;
+    border-color: keyboard.has-focus ? Palette.leaf : area.has-hover ? Palette.bronze : Palette.outline;
     Rectangle {
         x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
-        background: transparent; border-width: 1px; border-color: #49392c;
+        background: transparent; border-width: 1px; border-color: Palette.outline;
     }
     VerticalLayout {
         width: parent.width; height: parent.height;
@@ -58,22 +59,22 @@ export component AuthPanel inherits Rectangle {
     callback logout-requested();
     background: Palette.panel; border-width: 1px; border-color: Palette.outline; border-radius: 12px;
     PixelButton {
-        x: 32px; y: 28px; width: 176px; height: 42px; label: "К лаунчеру";
+        x: 32px; y: 28px; width: 176px; height: 42px; label: I18n.tr("К лаунчеру");
         clicked => { root.back-requested(); }
     }
-    Rectangle { x: 306px; y: 100px; width: 1px; height: parent.height - 152px; background: #49392c; }
+    Rectangle { x: 306px; y: 100px; width: 1px; height: parent.height - 152px; background: Palette.outline; }
     Image {
         x: 48px; y: 128px; width: 226px; height: 180px;
         source: AssetCatalog.brand-mark; image-fit: contain;
     }
     Text {
         x: 38px; y: 328px; width: 244px; height: 42px;
-        text: "NEVERMORELAND"; font-family: "Trebuchet MS"; font-size: 20px;
+        text: "NEVERMORE"; font-family: "Trebuchet MS"; font-size: 20px;
         color: Palette.frost; horizontal-alignment: center;
     }
     Text {
         x: 54px; y: 382px; width: 212px; height: 84px;
-        text: "Твой мир,\nтвоя история."; font-size: 21px; color: Palette.muted;
+        text: I18n.tr("Твой мир,\nтвоя история."); font-size: 21px; color: Palette.muted;
         horizontal-alignment: center;
     }
     content := Rectangle {
@@ -82,24 +83,24 @@ export component AuthPanel inherits Rectangle {
         if !root.verified && root.provider == 0: VerticalLayout {
             width: parent.width; height: parent.height;
             spacing: 14px; alignment: start;
-            Text { text: "Вход в аккаунт"; font-family: "Trebuchet MS"; font-size: 34px; color: Palette.frost; }
-            Text { text: "Выбери, как войти в EquestrianDream."; color: Palette.muted; font-size: 16px; }
+            Text { text: I18n.tr("Вход в аккаунт"); font-family: "Trebuchet MS"; font-size: 34px; color: Palette.frost; }
+            Text { text: I18n.tr("Выбери, как войти в EquestrianDream."); color: Palette.muted; font-size: 16px; }
             Rectangle { height: 12px; background: transparent; }
             HorizontalLayout {
                 width: parent.width; height: 254px; spacing: 18px;
                 ProviderCard {
                     width: (parent.width - 18px) / 2; icon: AssetCatalog.telegram-icon; provider: "Telegram";
-                    detail: "Подтверди вход\nв Telegram-боте."; action: "Войти"; button-enabled: !root.busy;
+                    detail: I18n.tr("Подтверди вход\nв Telegram-боте."); action: I18n.tr("Войти"); button-enabled: !root.busy;
                     clicked => { root.telegram-requested(); }
                 }
                 ProviderCard {
                     width: (parent.width - 18px) / 2; icon: AssetCatalog.discord-icon; provider: "Discord";
-                    detail: "Ещё один способ входа.\nСкоро в лаунчере."; action: "Подробнее"; button-enabled: !root.busy;
+                    detail: I18n.tr("Ещё один способ входа.\nСкоро в лаунчере."); action: I18n.tr("Подробнее"); button-enabled: !root.busy;
                     clicked => { root.discord-requested(); }
                 }
             }
             Text {
-                text: root.busy || root.error ? root.message : "Впервые здесь? Бот поможет создать аккаунт\nпри первом входе через Telegram.";
+                text: root.busy || root.error ? I18n.tr(root.message) : I18n.tr("Впервые здесь? Бот поможет создать аккаунт\nпри первом входе через Telegram.");
                 color: root.error ? #ef9d84 : Palette.muted; font-size: 14px; wrap: word-wrap;
             }
         }
@@ -109,18 +110,18 @@ export component AuthPanel inherits Rectangle {
             HorizontalLayout {
                 height: 70px; spacing: 18px; alignment: start;
                 Image { width: 68px; height: 68px; source: AssetCatalog.telegram-icon; image-fit: contain; }
-                Text { text: "Вход через Telegram"; font-family: "Trebuchet MS"; font-size: 28px; color: Palette.frost; vertical-alignment: center; }
+                Text { text: I18n.tr("Вход через Telegram"); font-family: "Trebuchet MS"; font-size: 28px; color: Palette.frost; vertical-alignment: center; }
             }
             Rectangle {
-                height: 98px; background: #100c09; border-width: 1px;
-                border-color: root.error ? #a65c45 : code-keyboard.has-focus || code-area.has-hover ? Palette.bronze : #574737;
+                height: 98px; background: Palette.ink; border-width: 1px;
+                border-color: root.error ? #a65c45 : code-keyboard.has-focus || code-area.has-hover ? Palette.bronze : Palette.outline;
                 forward-focus: code-keyboard;
                 accessible-role: button;
-                accessible-label: "Скопировать код подтверждения";
+                accessible-label: I18n.tr("Скопировать код подтверждения");
                 VerticalLayout {
                     padding: 12px; spacing: 4px;
-                    Text { text: root.code != "" ? "Код подтверждения · нажмите, чтобы скопировать" : "Подключение к Telegram"; font-size: 13px; color: Palette.muted; horizontal-alignment: center; }
-                    Text { text: root.code != "" ? root.code : root.busy ? "Ожидаем ответ…" : "Повторить вход"; font-family: "Consolas"; font-size: root.code != "" ? 32px : 22px; font-weight: 600; color: Palette.frost; horizontal-alignment: center; }
+                    Text { text: root.code != "" ? I18n.tr("Код подтверждения · нажмите, чтобы скопировать") : I18n.tr("Подключение к Telegram"); font-size: 13px; color: Palette.muted; horizontal-alignment: center; }
+                    Text { text: root.code != "" ? root.code : root.busy ? I18n.tr("Ожидаем ответ…") : I18n.tr("Повторить вход"); font-family: "Consolas"; font-size: root.code != "" ? 32px : 22px; font-weight: 600; color: Palette.frost; horizontal-alignment: center; }
                 }
                 code-keyboard := FocusScope {
                     enabled: root.code != ""; focus-on-click: false;
@@ -138,22 +139,22 @@ export component AuthPanel inherits Rectangle {
                     clicked => { code-keyboard.focus(); code-copy.select-all(); code-copy.copy(); }
                 }
             }
-            Text { text: root.message; color: root.error ? #ef9d84 : Palette.muted; font-size: 15px; wrap: word-wrap; min-height: 68px; }
+            Text { text: I18n.tr(root.message); color: root.error ? #ef9d84 : Palette.muted; font-size: 15px; wrap: word-wrap; min-height: 68px; }
             PixelButton {
-                height: 54px; label: root.link != "" ? "Открыть бота" : "Войти через Telegram";
+                height: 54px; label: root.link != "" ? I18n.tr("Открыть бота") : I18n.tr("Войти через Telegram");
                 primary: true; button-enabled: root.link != "" || !root.busy;
                 clicked => { if (root.link != "") { root.open-requested(); } else { root.telegram-requested(); } }
             }
             HorizontalLayout {
                 height: 44px; spacing: 12px;
                 PixelButton {
-                    horizontal-stretch: 1; label: "Копировать ссылку"; button-enabled: root.link != "";
+                    horizontal-stretch: 1; label: I18n.tr("Копировать ссылку"); button-enabled: root.link != "";
                     clicked => { link-copy.select-all(); link-copy.copy(); }
                 }
-                PixelButton { horizontal-stretch: 1; label: "Другой способ"; clicked => { root.providers-requested(); } }
+                PixelButton { horizontal-stretch: 1; label: I18n.tr("Другой способ"); clicked => { root.providers-requested(); } }
             }
             if root.error && root.link != "": PixelButton {
-                height: 40px; label: "Новый запрос"; button-enabled: !root.busy;
+                height: 40px; label: I18n.tr("Новый запрос"); button-enabled: !root.busy;
                 clicked => { root.telegram-requested(); }
             }
         }
@@ -161,20 +162,20 @@ export component AuthPanel inherits Rectangle {
             width: parent.width; height: parent.height;
             spacing: 22px; alignment: start;
             Image { width: 96px; height: 96px; source: AssetCatalog.discord-icon; image-fit: contain; }
-            Text { text: "Вход через Discord"; font-family: "Trebuchet MS"; font-size: 32px; color: Palette.frost; }
-            Text { text: "Этот способ входа ещё не подключён.\nПока войди через Telegram — он уже доступен."; font-size: 17px; color: Palette.muted; wrap: word-wrap; }
-            PixelButton { height: 54px; label: "Войти через Telegram"; primary: true; button-enabled: !root.busy; clicked => { root.telegram-requested(); } }
-            PixelButton { height: 44px; label: "Все способы входа"; clicked => { root.providers-requested(); } }
+            Text { text: I18n.tr("Вход через Discord"); font-family: "Trebuchet MS"; font-size: 32px; color: Palette.frost; }
+            Text { text: I18n.tr("Этот способ входа ещё не подключён.\nПока войди через Telegram — он уже доступен."); font-size: 17px; color: Palette.muted; wrap: word-wrap; }
+            PixelButton { height: 54px; label: I18n.tr("Войти через Telegram"); primary: true; button-enabled: !root.busy; clicked => { root.telegram-requested(); } }
+            PixelButton { height: 44px; label: I18n.tr("Все способы входа"); clicked => { root.providers-requested(); } }
         }
         if root.verified: VerticalLayout {
             width: parent.width; height: parent.height;
             spacing: 20px; alignment: start;
-            Text { text: "Твой аккаунт"; font-family: "Trebuchet MS"; font-size: 34px; color: Palette.frost; }
+            Text { text: I18n.tr("Твой аккаунт"); font-family: "Trebuchet MS"; font-size: 34px; color: Palette.frost; }
             Image { width: 96px; height: 96px; source: AssetCatalog.avatar; image-fit: contain; }
             Text { text: root.nickname; color: Palette.frost; font-size: 30px; font-weight: 600; }
-            Text { text: "Вход выполнен через Telegram.\nВсё готово к игре."; color: Palette.muted; font-size: 17px; }
-            PixelButton { height: 54px; label: "Вернуться к игре"; primary: true; clicked => { root.back-requested(); } }
-            PixelButton { height: 44px; label: "Выйти из аккаунта"; clicked => { root.logout-requested(); } }
+            Text { text: I18n.tr("Вход выполнен через Telegram.\nВсё готово к игре."); color: Palette.muted; font-size: 17px; }
+            PixelButton { height: 54px; label: I18n.tr("Вернуться к игре"); primary: true; clicked => { root.back-requested(); } }
+            PixelButton { height: 44px; label: I18n.tr("Выйти из аккаунта"); clicked => { root.logout-requested(); } }
         }
     }
     link-copy := TextInput { text: root.link; visible: false; read-only: true; }

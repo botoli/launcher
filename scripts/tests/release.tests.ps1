@@ -44,7 +44,7 @@ edition = "2024"
 "@
     Write-Fixture '../vendor/src/lib.rs' ''
     Write-Fixture 'README.md' "# Fixture`r`n`r`nВерсия: **0.1.3**`r`n`r`nExample: 0.1.3`r`n"
-    Write-Fixture 'packaging/README.txt' "Equestrian Dream Launcher 0.1.3`r`nUser instructions`r`n"
+    Write-Fixture 'packaging/README.txt' "Nevermore Launcher 0.1.3`r`nUser instructions`r`n"
     Push-Location $fixtureRoot
     try {
         & cargo generate-lockfile --offline

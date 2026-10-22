@@ -57,7 +57,7 @@ foreach ($package in $packages) {
     $lockMatches += $block
 }
 $readmeMatch = Find-One $texts['README.md'] ('(?m)^Версия: \*\*(?<version>' + $versionPattern + ')\*\*\.?\r?$') 'README version'
-$packageReadmeMatch = Find-One $texts['packaging/README.txt'] ('\AEquestrian Dream Launcher (?<version>' + $versionPattern + ')(?=\r?\n)') 'distribution README version'
+$packageReadmeMatch = Find-One $texts['packaging/README.txt'] ('\ANevermore Launcher (?<version>' + $versionPattern + ')(?=\r?\n)') 'distribution README version'
 foreach ($match in @($readmeMatch, $packageReadmeMatch)) {
     if ($match.Groups['version'].Value -ne $version) { throw 'README version differs from Cargo.toml' }
 }

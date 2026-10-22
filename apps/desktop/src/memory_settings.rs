@@ -438,6 +438,43 @@ mod tests {
         adapter.set_size(PhysicalSize::new(1180, 750));
     }
 
+    // Below the button, only the hover particles can paint bright purple pixels.
+    fn radial_particle_count(window: &AppWindow, adapter: &MinimalSoftwareWindow) -> usize {
+        window.window().request_redraw();
+        let mut pixels = vec![Rgb8Pixel::default(); 1180 * 750];
+        assert!(adapter.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, 1180);
+        }));
+        pixels
+            .chunks_exact(1180)
+            .skip(658)
+            .take(56)
+            .flat_map(|row| row[876..1124].iter())
+            .filter(|pixel| {
+                pixel.b > 80
+                    && i16::from(pixel.b) - i16::from(pixel.r) > 10
+                    && i16::from(pixel.r) - i16::from(pixel.g) > 10
+            })
+            .count()
+    }
+
+    // Read only the portal interior above the label, excluding moving sparks.
+    fn portal_pixels(window: &AppWindow, adapter: &MinimalSoftwareWindow) -> Vec<Rgb8Pixel> {
+        window.window().request_redraw();
+        let mut pixels = vec![Rgb8Pixel::default(); 1180 * 750];
+        assert!(adapter.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, 1180);
+        }));
+        // Preparation expands the launch panel upwards by 84 logical pixels.
+        let interior_y = if window.get_preparing() { 516 } else { 600 };
+        pixels
+            .chunks_exact(1180)
+            .skip(interior_y)
+            .take(6)
+            .flat_map(|row| row[1024..1088].iter().copied())
+            .collect()
+    }
+
     #[test]
     fn memory_screen_syncs_validates_saves_and_renders() {
         let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
@@ -604,9 +641,7 @@ mod tests {
         window.set_version("1.21.1".into());
         window.set_server_address("server.example:25565".into());
         window.set_nickname_input("TestPlayer".into());
-        window.set_installation_path(
-            r"C:\Users\Player\AppData\Local\EquestrianDreamLauncher\game".into(),
-        );
+        window.set_installation_path(r"C:\Users\Player\AppData\Local\Nevermore\game".into());
         controller.bind(&window);
         let login_gate = launcher_core::auth::telegram::TelegramAuthGate::new(
             launcher_core::auth::telegram::TelegramAuthClient::new(
@@ -672,10 +707,116 @@ mod tests {
         assert!(!window.get_auth_busy());
         assert_eq!(window.get_auth_provider(), 0);
         render(&window, &adapter, "main-initial");
+        let preview_plays = Rc::new(std::cell::Cell::new(0));
+        let preview_count = preview_plays.clone();
+        window.on_play_requested(move |_| preview_count.set(preview_count.get() + 1));
+        click(&window, 1000.0, 620.0);
+        assert_eq!(
+            preview_plays.get(),
+            1,
+            "The first click must still activate Play"
+        );
+        std::thread::sleep(Duration::from_millis(280));
+        slint::platform::update_timers_and_animations();
+        assert!(
+            radial_particle_count(&window, &adapter) > 0,
+            "Hover must emit radial particles"
+        );
+        window.window().dispatch_event(WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(600.0, 450.0),
+        });
+        radial_particle_count(&window, &adapter);
+        std::thread::sleep(Duration::from_millis(320));
+        slint::platform::update_timers_and_animations();
+        assert_eq!(
+            radial_particle_count(&window, &adapter),
+            0,
+            "Play retaining keyboard focus after a click must not keep hover particles alive"
+        );
+        // Retain the same focused button while preparing, changing stages,
+        // then cancelling back to ready with the pointer away from Play.
+        window.set_loading(true);
+        window.set_preparing(true);
+        window.set_play_enabled(false);
+        for (label, preview) in [
+            ("Проверка...", "play-motion-checking"),
+            ("Загрузка...", "play-motion-downloading"),
+            ("Запуск...", "play-motion-launching"),
+        ] {
+            window.set_play_label(label.into());
+            slint::platform::update_timers_and_animations();
+            render(&window, &adapter, "play-motion-transition-start");
+            std::thread::sleep(Duration::from_millis(100));
+            slint::platform::update_timers_and_animations();
+            render(&window, &adapter, preview);
+        }
+        window.set_preparing(false);
+        window.set_play_label("Игра запущена".into());
+        slint::platform::update_timers_and_animations();
+        render(&window, &adapter, "play-motion-running");
+        window.set_loading(false);
+        window.set_play_enabled(true);
+        window.set_play_label("Играть".into());
+        slint::platform::update_timers_and_animations();
+        render(&window, &adapter, "play-motion-cancel-start");
+        std::thread::sleep(Duration::from_millis(600));
+        slint::platform::update_timers_and_animations();
+        assert_eq!(
+            radial_particle_count(&window, &adapter),
+            0,
+            "Cancelling preparation must not enable hover particles with the pointer away"
+        );
+        render(&window, &adapter, "play-motion-cancelled");
+        let language_path = root.path().join("state/language.json");
+        crate::i18n::bind(&window, language_path.clone());
+        assert!(!window.global::<crate::I18n>().get_english());
+        // The sidebar stays in place on both Home and News. Exercise its real
+        // mouse and keyboard controls, plus the controller's operation guard.
+        click(&window, 128.0, 612.0);
+        assert!(window.global::<crate::I18n>().get_english());
+        assert_eq!(
+            window.global::<crate::I18n>().invoke_tr("Играть".into()),
+            "Play"
+        );
+        assert_eq!(fs::read_to_string(&language_path).unwrap().trim(), "\"en\"");
+        render(&window, &adapter, "language-home-en");
+        window.set_news_visible(true);
+        render(&window, &adapter, "language-news-en");
+        window.set_news_visible(false);
+        window.set_settings_visible(true);
+        render(&window, &adapter, "language-settings-en");
+        window.global::<crate::I18n>().invoke_select_language(false);
+        assert!(window.global::<crate::I18n>().get_english());
+        window.set_settings_visible(false);
+        window.set_auth_visible(true);
+        window.set_auth_provider(0);
+        render(&window, &adapter, "language-account-en");
+        window.set_auth_visible(false);
+        window.set_loading(true);
+        click(&window, 55.0, 612.0);
+        window.global::<crate::I18n>().invoke_select_language(false);
+        assert!(window.global::<crate::I18n>().get_english());
+        window.set_loading(false);
+        click(&window, 55.0, 612.0);
+        assert!(!window.global::<crate::I18n>().get_english());
+        key(&window, slint::platform::Key::Tab);
+        key(&window, slint::platform::Key::Return);
+        assert!(window.global::<crate::I18n>().get_english());
+        crate::i18n::bind(&window, language_path.clone());
+        assert!(
+            window.global::<crate::I18n>().get_english(),
+            "restore saved language"
+        );
+        window.global::<crate::I18n>().invoke_select_language(false);
+        assert_eq!(
+            window.global::<crate::I18n>().invoke_tr("Играть".into()),
+            "Играть"
+        );
+
         // News is a real route: verify mouse/keyboard access, history scrolling,
         // return navigation, and the launch-time navigation lock.
         assert!(!window.get_news_visible());
-        click(&window, 190.0, 80.0);
+        click(&window, 100.0, 170.0);
         assert!(window.get_news_visible());
         key(&window, slint::platform::Key::Return);
         assert!(window.get_news_visible());
@@ -688,14 +829,14 @@ mod tests {
                 delta_y: -650.0,
             });
         render(&window, &adapter, "news-history");
-        click(&window, 80.0, 80.0);
+        click(&window, 100.0, 108.0);
         assert!(!window.get_news_visible());
         key(&window, slint::platform::Key::Tab);
         key(&window, slint::platform::Key::Return);
         assert!(window.get_news_visible());
-        click(&window, 80.0, 80.0);
+        click(&window, 100.0, 108.0);
         window.set_loading(true);
-        click(&window, 190.0, 80.0);
+        click(&window, 100.0, 170.0);
         assert!(!window.get_news_visible());
         window.set_loading(false);
 
@@ -1018,7 +1159,41 @@ mod tests {
             crate::server_monitor::ServerMonitor::start(&window, runtime.handle(), ""),
         );
         render(&window, &adapter, "main-ready");
-        click(&window, 590.0, 545.0);
+        let play_position = slint::LogicalPosition::new(1000.0, 620.0);
+        window.window().dispatch_event(WindowEvent::PointerMoved {
+            position: play_position,
+        });
+        render(&window, &adapter, "play-sparks-hover-start");
+        let portal_before = portal_pixels(&window, &adapter);
+        assert!(
+            portal_before.iter().any(|pixel| {
+                i16::from(pixel.b) - i16::from(pixel.r) > 20
+                    && i16::from(pixel.r) - i16::from(pixel.g) > 20
+            }),
+            "The sampled region must contain the purple portal surface"
+        );
+        std::thread::sleep(Duration::from_millis(280));
+        slint::platform::update_timers_and_animations();
+        assert_ne!(
+            portal_before,
+            portal_pixels(&window, &adapter),
+            "The portal surface must animate independently of the sparks"
+        );
+        render(&window, &adapter, "play-sparks-hover");
+        std::thread::sleep(Duration::from_millis(420));
+        slint::platform::update_timers_and_animations();
+        render(&window, &adapter, "play-sparks-drift");
+        window.window().dispatch_event(WindowEvent::PointerPressed {
+            position: play_position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        render(&window, &adapter, "play-sparks-pressed");
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position: play_position,
+                button: slint::platform::PointerEventButton::Left,
+            });
         assert!(window.get_loading());
         assert!(!window.get_play_enabled());
         click(&window, 1042.0, 30.0);
@@ -1037,6 +1212,18 @@ mod tests {
         key(&window, "ChangedPlayer");
         assert_eq!(window.get_nickname_input(), "TestPlayer");
         render(&window, &adapter, "main-launching");
+        // Let the click spring and caption transition settle before checking
+        // that the portal texture itself stays frozen while Play is disabled.
+        std::thread::sleep(Duration::from_millis(560));
+        slint::platform::update_timers_and_animations();
+        let paused_portal = portal_pixels(&window, &adapter);
+        std::thread::sleep(Duration::from_millis(120));
+        slint::platform::update_timers_and_animations();
+        assert_eq!(
+            paused_portal,
+            portal_pixels(&window, &adapter),
+            "A disabled Play button must pause its portal animation"
+        );
         pump_until(&events, || !window.get_loading());
         assert!(window.get_play_enabled());
         assert!(!window.get_preparing());

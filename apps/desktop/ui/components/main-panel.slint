@@ -1,8 +1,9 @@
+import { I18n } from "../i18n.slint";
 import { AssetCatalog } from "../theme/assets.slint";
 import { Palette } from "../theme/palette.slint";
 import { PixelButton } from "pixel-button.slint";
 export component MainPanel inherits Rectangle {
-    in property <string> project-title;
+    in property <string> project-title: "Nevermore";
     in property <string> version;
     in property <string> server-address;
     in property <bool> server-online;
@@ -11,32 +12,45 @@ export component MainPanel inherits Rectangle {
     in property <int> server-signal;
     in property <bool> loading;
     in property <bool> play-enabled: true;
-    in property <string> play-label: "Играть";
+    in property <string> play-label: I18n.tr("Играть");
     in property <float> u: 1;
     callback play-clicked();
+    private property <length> play-width: clamp(round(root.width * 0.27 / 8px) * 8px, 192px, 272px);
     background: transparent;
     Rectangle {
-        x: 34px * root.u; y: 32px * root.u; width: 70px * root.u; height: 70px * root.u;
-        border-color: #75604d55; border-width: 1px; border-radius: 13px * root.u; background: #21181088;
-        Image { x: 10px * root.u; y: 10px * root.u; width: parent.width - 20px * root.u; height: parent.height - 20px * root.u; source: AssetCatalog.version-icon; image-fit: contain; }
+        x: 24px; y: 23px; width: 60px; height: 60px;
+        background: Palette.ink; border-width: 1px; border-color: Palette.outline; border-radius: 10px;
+        Image { x: 8px; y: 8px; width: 44px; height: 44px; source: AssetCatalog.version-icon; image-fit: contain; }
     }
-    Text { x: 132px * root.u; y: 38px * root.u; width: 150px * root.u; height: 24px * root.u; text: "Версия игры"; font-size: 16px * root.u; color: Palette.muted; }
-    Text { x: 132px * root.u; y: 61px * root.u; width: 150px * root.u; height: 35px * root.u; text: root.version; color: Palette.frost; font-size: 25px * root.u; font-family: "Consolas"; font-weight: 600; }
-    Rectangle { x: 294px * root.u; y: 32px * root.u; height: 70px * root.u; width: 1px; background: #bfa38433; }
-    Image {
-        x: 336px * root.u; y: 45px * root.u; width: 42px * root.u; height: 44px * root.u;
-        source: root.server-signal == 3 ? AssetCatalog.server-icon : root.server-signal == 2 ? AssetCatalog.server-fair-icon : root.server-signal == 1 ? AssetCatalog.server-poor-icon : AssetCatalog.server-unavailable-icon;
-        image-fit: contain;
+    Text {
+        x: 102px; y: 27px; width: 170px; height: 26px;
+        text: root.project-title; color: Palette.frost; font-size: 20px; font-weight: 700; overflow: elide;
     }
-    Rectangle { x: 394px * root.u; y: 46px * root.u; width: 9px * root.u; height: 9px * root.u; border-radius: 5px; background: root.server-online ? #70d928 : #a69a89; }
-    Text { x: 414px * root.u; y: 38px * root.u; width: 172px * root.u; height: 24px * root.u; text: root.server-status; overflow: elide; font-size: 16px * root.u; color: Palette.muted; }
-    Text { x: 414px * root.u; y: 61px * root.u; width: 172px * root.u; height: 35px * root.u; text: root.server-online && root.ping-ms >= 0 ? root.ping-ms + " мс" : "—"; font-size: 25px * root.u; color: Palette.frost; font-weight: 600; }
+    Text {
+        x: 102px; y: 57px; width: 170px; height: 22px;
+        text: "Minecraft " + root.version; color: Palette.muted; font-size: 14px; overflow: elide;
+    }
+    Rectangle { x: 288px; y: 31px; width: 1px; height: 46px; background: Palette.outline; }
+    Rectangle {
+        x: 310px; y: 34px; width: 9px; height: 9px; border-radius: 5px;
+        background: root.server-online ? #89CB83 : Palette.muted;
+    }
+    Text {
+        x: 329px; y: 27px; width: parent.width - root.play-width - self.x - 40px; height: 24px;
+        text: I18n.tr(root.server-status); overflow: elide; font-size: 14px; color: Palette.muted;
+    }
+    Text {
+        x: 329px; y: 57px; width: parent.width - root.play-width - self.x - 40px; height: 22px;
+        text: root.server-online && root.ping-ms >= 0 ? root.ping-ms + I18n.tr(" мс") : "—";
+        font-size: 17px; color: Palette.frost; font-weight: 600;
+    }
     PixelButton {
-        x: parent.width - self.width - 26px * root.u; y: 27px * root.u;
-        width: 266px * root.u; height: 80px * root.u;
-        primary: true; label-font-size: 29px * root.u;
+        x: parent.width - self.width - 24px; y: 23px; width: root.play-width; height: 64px;
+        primary: true; label-font-size: 24px;
+        sparks: true;
+        portal-style: true;
         button-enabled: root.play-enabled && !root.loading;
-        label: root.play-label; show-icon: !root.loading; icon: AssetCatalog.play-icon;
+        label: I18n.tr(root.play-label); show-icon: !root.loading; icon: AssetCatalog.play-icon;
         clicked => { root.play-clicked(); }
     }
 }

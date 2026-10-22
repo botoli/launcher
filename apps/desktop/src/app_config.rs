@@ -44,7 +44,7 @@ fn parse_server_url(json: &str) -> Result<String, AppConfigError> {
         .map_err(AppConfigError::InvalidConfig)
 }
 
-const APPLICATION_DIRECTORY: &str = "EquestrianDreamLauncher";
+const APPLICATION_DIRECTORY: &str = "Nevermore";
 const SERVER_URL_ENV: &str = "LAUNCHER_SERVER_URL";
 const DATA_DIRECTORY_ENV: &str = "LAUNCHER_DATA_DIR";
 const LOCAL_APP_DATA_ENV: &str = "LOCALAPPDATA";
@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn resolves_windows_local_app_data_layout() {
         let config = DesktopAppConfig::resolve(values()).unwrap();
-        let root = PathBuf::from(r"C:\Users\Test\AppData\Local\EquestrianDreamLauncher");
+        let root = PathBuf::from(r"C:\Users\Test\AppData\Local\Nevermore");
 
         assert_eq!(config.paths.root, root);
         assert_eq!(config.paths.game(), root.join("game"));

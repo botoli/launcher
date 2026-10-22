@@ -6,8 +6,8 @@
 ## Публикация
 
 1. Для следующего выпуска выполните `./scripts/release.ps1 patch` (исправления), `minor` (новые возможности) или `major` (несовместимые изменения). Скрипт обновит `Cargo.toml`, `Cargo.lock`, `README.md` и заголовок `packaging/README.txt`. Предварительный просмотр: `./scripts/release.ps1 patch -WhatIf`; проверка: `./scripts/release.ps1 -Check`.
-2. Из корня репозитория выполните `./scripts/package-release.ps1`. Скрипт проверяет форматирование, сборку, Clippy и тесты, собирает release EXE со статическим CRT и формирует `dist/EquestrianDreamLauncher-<версия>-windows-x64.zip`.
-3. В админке загрузите этот ZIP и укажите **точно тот же номер версии**, с которым собран EXE. Архив содержит только `EquestrianDreamLauncher.exe` и `README.txt` в корне. Публикуйте стабильные версии `MAJOR.MINOR.PATCH`; встроенный Windows version resource также проверяется клиентом.
+2. Из корня репозитория выполните `./scripts/package-release.ps1`. Скрипт проверяет форматирование, сборку, Clippy и тесты, собирает release EXE со статическим CRT и формирует `dist/Nevermore-<версия>-windows-x64.zip`.
+3. В админке загрузите этот ZIP и укажите **точно тот же номер версии**, с которым собран EXE. Архив содержит только `Nevermore.exe` и `README.txt` в корне. Публикуйте стабильные версии `MAJOR.MINOR.PATCH`; встроенный Windows version resource также проверяется клиентом.
 4. Backend вычисляет размер и SHA-256. Повторно публиковать тот же номер нельзя; для исправлений нужен новый номер и новая сборка.
 
 Клиент не вызывает `POST /api/upload-launcher`, не использует административные cookie или Telegram-токен для обновлений.

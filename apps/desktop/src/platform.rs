@@ -1,7 +1,6 @@
 use std::io;
 
-const SINGLE_INSTANCE_MUTEX_NAME: &str =
-    "Local\\EquestrianDreamLauncher-4A8CF876-8460-4C22-8771-657F401FBFA0";
+const SINGLE_INSTANCE_MUTEX_NAME: &str = "Local\\Nevermore-4A8CF876-8460-4C22-8771-657F401FBFA0";
 
 pub enum SingleInstanceState {
     Acquired(SingleInstanceGuard),
@@ -120,7 +119,7 @@ mod tests {
 
     #[test]
     fn second_mutex_acquisition_reports_an_existing_instance() {
-        let name = format!("Local\\EquestrianDreamLauncher-Test-{}", std::process::id());
+        let name = format!("Local\\Nevermore-Test-{}", std::process::id());
         let first = acquire_named_instance(&name).unwrap();
         assert!(matches!(first, SingleInstanceState::Acquired(_)));
 

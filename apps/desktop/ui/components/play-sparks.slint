@@ -1,0 +1,47 @@
+// A small, fixed particle pool driven by Slint's frame clock. No timers or
+// pointer handlers: the button keeps its original hit area and input behavior.
+export component PlaySparks inherits Rectangle {
+    in property <float> heat: 0;
+    background: transparent;
+    private property <duration> clock: animation-tick();
+
+    for index in 64: Rectangle {
+        // Coprime offsets spread births across the button and the cycle.
+        private property <bool> ambient: index < 10;
+        private property <duration> lifetime: self.ambient
+            ? 1480ms + mod(index * 173, 1100) * 1ms
+            : 950ms + mod(index * 137, 950) * 1ms;
+        private property <float> age: mod(root.clock + index * 317ms, self.lifetime) / self.lifetime;
+        private property <float> spread: mod(index * 17, 61) / 60;
+        private property <float> direction: mod(index * 11, 9) - 4;
+        private property <length> rise: 48px + mod(index * 13, 43) * 1px + root.heat * 20px;
+        private property <float> presence: self.ambient ? 0.72 + root.heat * 0.20 : root.heat * 0.92;
+        // Hover particles emit outwards from all four edges, away from text.
+        private property <int> edge: mod(index + 2, 4);
+        private property <angle> heading: self.edge == 0 ? 220deg + self.spread * 100deg
+            : self.edge == 1 ? -65deg + self.spread * 130deg
+            : self.edge == 2 ? 35deg + self.spread * 110deg
+            : 115deg + self.spread * 130deg;
+        private property <length> travel: (28px + mod(index * 19, 37) * 1px)
+            * self.age * (1.75 - 0.75 * self.age);
+        private property <length> origin-x: self.edge == 1 ? root.width - 2px
+            : self.edge == 3 ? 2px : 12px + (root.width - 24px) * self.spread;
+        private property <length> origin-y: self.edge == 0 ? 2px
+            : self.edge == 2 ? root.height - 2px : 8px + (root.height - 16px) * self.spread;
+
+        x: self.ambient ? 12px + (root.width - 24px) * self.spread
+            + self.direction * 3px * self.age
+            + sin(self.age * 300deg + index * 47deg) * 5px * self.age
+            : self.origin-x + cos(self.heading) * self.travel
+                + sin(self.age * 240deg + index * 31deg) * 3px * self.age;
+        y: self.ambient ? 2px - self.rise * self.age * (1.6 - 0.6 * self.age)
+            : self.origin-y + sin(self.heading) * self.travel
+                + cos(self.age * 220deg + index * 19deg) * 3px * self.age;
+        width: (2 + mod(index * 5, 3)) * 1px;
+        height: self.width;
+        background: mod(index, 3) == 0 ? #DBBFFF : mod(index, 3) == 1 ? #B589F4 : #9563DD;
+        // Fade in at birth, then dissolve before wrapping to the next spark.
+        opacity: clamp(self.age / 0.09, 0, 1)
+            * (1 - self.age) * (1 - self.age * (self.ambient ? 1 : 0.4)) * self.presence;
+    }
+}
