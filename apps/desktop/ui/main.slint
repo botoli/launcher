@@ -1,5 +1,8 @@
 import { AssetCatalog } from "theme/assets.slint";
 import { Palette } from "theme/palette.slint";
+import { NewsPanel } from "components/news-panel.slint";
+import { Navigation } from "components/navigation.slint";
+import { Hero } from "components/hero.slint";
 import { TitleBar } from "components/title-bar.slint";
 import { MainPanel } from "components/main-panel.slint";
 import { ProgressPanel } from "components/progress-panel.slint";
@@ -7,8 +10,18 @@ import { SettingsPanel } from "components/settings-panel.slint";
 import { DiagnosticsPanel } from "components/diagnostics-panel.slint";
 import { UpdatePanel } from "components/update-panel.slint";
 import { AuthPanel } from "components/auth-panel.slint";
+import { JavaPanel } from "components/java-panel.slint";
 
 export component AppWindow inherits Window {
+    icon: AssetCatalog.brand-mark;
+    in property <bool> java-can-cancel: true;
+    in property <float> java-progress;
+    in property <bool> java-visible;
+    in property <bool> java-busy;
+    in property <bool> java-error;
+    in property <string> java-message;
+    callback java-install-requested();
+    callback java-dismiss-requested();
     in-out property <string> nickname-input;
     in property <string> nickname-error;
     in property <string> version;
@@ -29,13 +42,12 @@ export component AppWindow inherits Window {
     in property <bool> preparing;
     in-out property <bool> auth-play-pending;
     in-out property <bool> settings-visible;
+    in-out property <bool> news-visible;
     in-out property <string> memory-input;
     in property <int> memory-value;
     in property <int> memory-maximum;
     in property <string> memory-gib;
     in property <string> memory-error;
-    in property <string> memory-summary;
-    in property <string> memory-recommendation;
     in property <string> memory-suggestion;
     in property <bool> memory-detected;
     in property <bool> memory-save-enabled;
@@ -92,13 +104,12 @@ export component AppWindow inherits Window {
     no-frame: true;
     resize-border-width: 6px;
     preferred-width: 1180px;
-    preferred-height: 750px;
-    min-width: 1180px;
-    min-height: 750px;
-    max-width: 1180px;
-    max-height: 750px;
+    preferred-height: 787px;
+    min-width: 1000px;
+    min-height: 720px;
+    private property <float> u: root.width / 1536px;
     background: Palette.ink;
-    default-font-family: "Segoe UI";
+    default-font-family: "Arial";
     default-font-size: 15px;
 
     Image {
@@ -111,22 +122,22 @@ export component AppWindow inherits Window {
     Rectangle {
         width: parent.width;
         height: parent.height;
-        background: #020a1266;
+        background: @linear-gradient(90deg, #100905dc 0%, #10090580 38%, #10090500 72%, #10090520 100%);
     }
 
     VerticalLayout {
         spacing: 0px;
 
         TitleBar {
-            height: 60px;
+            height: 74px * root.u;
             nickname <=> root.nickname-input;
             nickname-error: root.nickname-error;
-            nickname-enabled: !root.loading && !root.update-visible;
+            nickname-enabled: !root.loading && !root.update-visible && !root.java-visible;
             nickname-editable: false;
             auth-verified: root.auth-verified;
             account-active: root.auth-visible;
             account-clicked => { root.auth-visible = true; }
-            settings-enabled: !root.loading && !root.auth-visible && !root.update-visible;
+            settings-enabled: !root.loading && !root.auth-visible && !root.update-visible && !root.java-visible;
             settings-clicked => { root.settings-requested(); }
 
             minimize-clicked => {
@@ -148,66 +159,55 @@ export component AppWindow inherits Window {
 
             if !root.settings-visible && !root.diagnostics-visible && !root.auth-visible: main-view := Rectangle {
             background: transparent;
-            panel := MainPanel {
-                width: parent.width * 0.70;
-                height: self.width * 957 / 1644;
-                x: (parent.width - self.width) / 2;
-                y: 12px;
-                project-title: "EquestrianDream";
-                version: root.version;
-                server-address: root.server-address;
-                server-online: root.server-online;
-                ping-ms: root.ping-ms;
-                server-status: root.server-status;
-                server-signal: root.server-signal;
-                loading: root.loading;
-                play-enabled: root.play-enabled && root.memory-ready && !root.update-visible;
-                play-label: root.auth-verified ? root.play-label : "Войти и играть";
-
-                play-clicked => {
-                    root.play-requested(root.nickname-input);
+            Navigation {
+                x: 56px * root.u; y: 0px; width: 416px * root.u; height: 64px * root.u; u: root.u;
+                available: !root.loading && !root.update-visible && !root.java-visible;
+                news-selected: root.news-visible;
+                home-clicked => { root.news-visible = false; }
+                news-clicked => { root.news-visible = true; }
+                settings-clicked => { root.settings-requested(); }
+            }
+            if root.news-visible: NewsPanel {
+                x: 56px * root.u; y: 88px * root.u;
+                width: min(1080px, parent.width - 112px * root.u);
+                height: parent.height - self.y - 32px;
+            }
+            if !root.news-visible: Rectangle {
+                width: parent.width; height: parent.height; background: transparent;
+                Hero {
+                    x: 80px * root.u; y: min(162px * root.u, parent.height * 0.18);
+                    width: 760px * root.u; height: 390px * root.u; u: min(root.u, (launch-surface.y - self.y - 24px) / 390px);
                 }
-            }
-
-            if root.preparing: Image {
-                x: (parent.width - self.width) / 2;
-                y: panel.y + panel.height + 18px;
-                width: 40px;
-                height: 40px;
-                source: AssetCatalog.horseshoe-decoration;
-                image-fit: contain;
-                property <float> angle;
-                Timer {
-                    interval: 16ms;
-                    running: root.preparing;
-                    triggered => { parent.angle = mod(parent.angle + 4, 360); }
+                launch-surface := Rectangle {
+                    x: 54px * root.u; y: parent.height - self.height - 136px * root.u;
+                    width: 886px * root.u; height: (root.loading || root.diagnostics-available || root.memory-problem != "" ? 228px : 202px) * root.u;
+                    background: #130e09ee; border-width: 1px; border-color: #ac947069; border-radius: 12px * root.u;
+                    MainPanel {
+                        x: 0px; y: 0px; width: parent.width; height: 132px * root.u; u: root.u;
+                        version: root.version; server-address: root.server-address;
+                        server-online: root.server-online; ping-ms: root.ping-ms;
+                        server-status: root.server-status; server-signal: root.server-signal;
+                        loading: root.loading;
+                        play-enabled: root.play-enabled && root.memory-ready && !root.update-visible && !root.java-visible;
+                        play-label: root.play-label;
+                        play-clicked => { root.play-requested(root.nickname-input); }
+                    }
+                    ProgressPanel {
+                        x: 35px * root.u; y: 132px * root.u; width: parent.width - 70px * root.u;
+                        height: parent.height - self.y; u: root.u;
+                        status-text: root.launcher-status; loading: root.loading;
+                        detail-text: root.memory-problem != "" ? root.memory-problem : root.loading || root.diagnostics-available ? root.launcher-detail : "";
+                        metrics-text: root.progress-metrics;
+                        progress: root.progress; progress-percent: root.progress-percent; has-progress: root.has-progress;
+                        show-diagnostics: root.diagnostics-available && !root.update-visible;
+                        diagnostics-clicked => { root.diagnostics-requested(); }
+                    }
                 }
-                transform-rotation: self.angle * 1deg;
-                transform-origin: { x: self.width / 2, y: self.height / 2 };
-            }
-
-            progress-panel := ProgressPanel {
-                x: 28px;
-                y: parent.height - self.height - 10px;
-                width: parent.width - 56px;
-                height: 104px;
-                status-text: root.launcher-status;
-                detail-text: root.memory-problem != "" ? root.memory-problem : root.launcher-detail;
-                metrics-text: root.progress-metrics;
-                progress: root.progress;
-                progress-percent: root.progress-percent;
-                has-progress: root.has-progress;
-                show-diagnostics: root.diagnostics-available && !root.update-visible;
-                diagnostics-clicked => { root.diagnostics-requested(); }
-            }
-
-            Image {
-                x: progress-panel.x + progress-panel.width - self.width - 20px;
-                y: progress-panel.y - self.height + 6px;
-                width: 78px;
-                height: self.width * 547 / 506;
-                source: AssetCatalog.cat-decoration;
-                image-fit: contain;
+                Text {
+                    x: 56px * root.u; y: parent.height - 70px * root.u; width: parent.width - self.x; height: 28px * root.u;
+                    text: "Твой мир. Твои лошади. Твоя история.";
+                    color: Palette.muted; font-size: 16px * root.u;
+                }
             }
             }
             if root.settings-visible && !root.diagnostics-visible && !root.auth-visible: SettingsPanel {
@@ -220,8 +220,6 @@ export component AppWindow inherits Window {
                 memory-maximum: root.memory-maximum;
                 memory-gib: root.memory-gib;
                 memory-error: root.memory-error;
-                memory-summary: root.memory-summary;
-                memory-recommendation: root.memory-recommendation;
                 memory-suggestion: root.memory-suggestion;
                 memory-detected: root.memory-detected;
                 memory-save-enabled: root.memory-save-enabled;
@@ -237,7 +235,7 @@ export component AppWindow inherits Window {
             if root.diagnostics-visible && !root.auth-visible: DiagnosticsPanel {
                 x: (parent.width - self.width) / 2;
                 y: 24px;
-                width: 1020px;
+                width: min(1020px, parent.width - 48px);
                 height: parent.height - 48px;
                 summary: root.diagnostics-summary;
                 log-text: root.diagnostics-text;
@@ -267,8 +265,25 @@ export component AppWindow inherits Window {
             }
         }
     }
+    if root.java-visible: Rectangle {
+        x: 0px; y: 74px * root.u; width: parent.width; height: parent.height - self.y;
+        background: #000000b8;
+        TouchArea { }
+        JavaPanel {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 700px; height: 380px;
+            message: root.java-message;
+            busy: root.java-busy;
+            error: root.java-error;
+            can-cancel: root.java-can-cancel;
+            progress: root.java-progress;
+            install-requested => { root.java-install-requested(); }
+            dismiss-requested => { root.java-dismiss-requested(); }
+        }
+    }
     if root.update-visible: Rectangle {
-        x: 0px; y: 60px; width: parent.width; height: parent.height - 60px;
+        x: 0px; y: 74px * root.u; width: parent.width; height: parent.height - self.y;
         background: #000000b8;
         TouchArea { }
         UpdatePanel {

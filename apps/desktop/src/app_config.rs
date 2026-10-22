@@ -15,9 +15,11 @@ const DEFAULT_CONFIG: &str = include_str!("../../../launcher-config.json");
 #[derive(Deserialize)]
 struct FileConfig {
     server_url: String,
+    #[serde(default)]
+    java21_msi_url: Option<String>,
 }
 
-fn read_server_url(path: &Path) -> Result<String, AppConfigError> {
+fn read_file_config(path: &Path) -> Result<FileConfig, AppConfigError> {
     let json = match fs::read_to_string(path) {
         Ok(json) => json,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => DEFAULT_CONFIG.to_owned(),
@@ -28,7 +30,12 @@ fn read_server_url(path: &Path) -> Result<String, AppConfigError> {
             });
         }
     };
-    parse_server_url(&json)
+    serde_json::from_str(&json).map_err(AppConfigError::InvalidConfig)
+}
+
+#[cfg(test)]
+fn read_server_url(path: &Path) -> Result<String, AppConfigError> {
+    read_file_config(path).map(|config| config.server_url)
 }
 
 fn parse_server_url(json: &str) -> Result<String, AppConfigError> {
@@ -100,17 +107,26 @@ impl ApplicationPaths {
 pub struct DesktopAppConfig {
     pub backend: LauncherBackendConfig,
     pub paths: ApplicationPaths,
+    pub java_installer_url: String,
 }
 
 impl DesktopAppConfig {
     pub fn load() -> Result<Self, AppConfigError> {
-        let mut values = EnvironmentValues::from_process()?;
+        let values = EnvironmentValues::from_process()?;
+        let executable = env::current_exe().map_err(AppConfigError::ExecutablePath)?;
+        Self::load_from(&executable.with_file_name(CONFIG_FILE), values)
+    }
+
+    fn load_from(path: &Path, mut values: EnvironmentValues) -> Result<Self, AppConfigError> {
+        let file = read_file_config(path)?;
         if values.server_url.is_none() {
-            let executable = env::current_exe().map_err(AppConfigError::ExecutablePath)?;
-            let path = executable.with_file_name(CONFIG_FILE);
-            values.server_url = Some(read_server_url(&path)?);
+            values.server_url = Some(file.server_url.clone());
         }
-        Self::resolve(values)
+        let mut config = Self::resolve(values)?;
+        // Old external configs only contain server_url. Use the URL embedded in
+        // the current release when this new optional field is absent.
+        config.java_installer_url = file.java21_msi_url.unwrap_or(config.java_installer_url);
+        Ok(config)
     }
 
     fn resolve(values: EnvironmentValues) -> Result<Self, AppConfigError> {
@@ -141,7 +157,13 @@ impl DesktopAppConfig {
             .map_err(|source| AppConfigError::InvalidBackend { source })?;
         let paths = ApplicationPaths::resolve(&values)?;
 
-        Ok(Self { backend, paths })
+        let defaults: FileConfig =
+            serde_json::from_str(DEFAULT_CONFIG).map_err(AppConfigError::InvalidConfig)?;
+        Ok(Self {
+            backend,
+            paths,
+            java_installer_url: defaults.java21_msi_url.unwrap_or_default(),
+        })
     }
 }
 
@@ -363,6 +385,46 @@ mod tests {
             config.paths.logs.join("launcher.log"),
             root.join("logs/launcher.log")
         );
+    }
+
+    #[test]
+    fn java_host_defaults_support_old_configs_and_explicit_overrides() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("launcher-config.json");
+        let expected = "https://launcher.nevermoreland.ru/download/OpenJDK21U-jdk_x64_windows_hotspot_21.0.3_9.msi";
+        assert_eq!(
+            DesktopAppConfig::load_from(&path, values())
+                .unwrap()
+                .java_installer_url,
+            expected
+        );
+        fs::write(&path, r#"{"server_url":"https://backend.example"}"#).unwrap();
+        assert_eq!(
+            DesktopAppConfig::load_from(&path, values())
+                .unwrap()
+                .java_installer_url,
+            expected
+        );
+        fs::write(&path, r#"{"server_url":"https://backend.example","java21_msi_url":"https://cdn.example/java.msi"}"#).unwrap();
+        assert_eq!(
+            DesktopAppConfig::load_from(&path, values())
+                .unwrap()
+                .java_installer_url,
+            "https://cdn.example/java.msi"
+        );
+        fs::write(
+            &path,
+            r#"{"server_url":"https://backend.example","java21_msi_url":""}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            DesktopAppConfig::load_from(&path, values())
+                .unwrap()
+                .java_installer_url,
+            ""
+        );
+        fs::write(&path, "broken json").unwrap();
+        assert!(DesktopAppConfig::load_from(&path, values()).is_err());
     }
 
     #[test]

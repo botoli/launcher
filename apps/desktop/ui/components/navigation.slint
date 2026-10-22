@@ -1,0 +1,31 @@
+import { Palette } from "../theme/palette.slint";
+component NavItem inherits FocusScope {
+    in property <string> label;
+    in property <bool> selected;
+    in property <bool> available: true;
+    in property <float> u: 1;
+    callback clicked();
+    enabled: root.available;
+    opacity: root.available ? 1 : 0.48;
+    accessible-role: button; accessible-label: root.label;
+    key-pressed(event) => { if (event.text == Key.Return || event.text == " ") { root.clicked(); return accept; } reject }
+    Rectangle { background: area.pressed ? #ffffff12 : area.has-hover ? #ffffff08 : transparent; }
+    Text { text: root.label; font-size: 18px * root.u; color: root.selected ? Palette.leaf : Palette.muted; horizontal-alignment: center; vertical-alignment: center; }
+    Rectangle { x: 0px; y: parent.height - 3px; width: parent.width; height: 3px; background: root.selected || root.has-focus ? Palette.leaf : transparent; }
+    area := TouchArea { enabled: root.available; mouse-cursor: root.available ? pointer : default; clicked => { root.focus(); root.clicked(); } }
+}
+export component Navigation inherits Rectangle {
+    in property <float> u: 1;
+    in property <bool> available: true;
+    in property <bool> news-selected;
+    callback home-clicked(); callback news-clicked(); callback settings-clicked();
+    background: transparent;
+    Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: #bfa38420; }
+    HorizontalLayout {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        spacing: 32px * root.u;
+        NavItem { width: 98px * root.u; label: "Главная"; selected: !root.news-selected; u: root.u; available: root.available; clicked => { root.home-clicked(); } }
+        NavItem { width: 98px * root.u; label: "Новости"; selected: root.news-selected; u: root.u; available: root.available; clicked => { root.news-clicked(); } }
+        NavItem { width: 124px * root.u; label: "Настройки"; u: root.u; available: root.available; clicked => { root.settings-clicked(); } }
+    }
+}

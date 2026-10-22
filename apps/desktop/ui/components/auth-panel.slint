@@ -13,12 +13,12 @@ component ProviderCard inherits Rectangle {
     accessible-role: button;
     accessible-label: root.action + " через " + root.provider;
     opacity: root.button-enabled ? 1 : 0.55;
-    background: area.pressed ? #0a1c2a : area.has-hover ? #183448 : #10283b;
+    background: area.pressed ? #19120e : area.has-hover ? #35281f : #241c16;
     border-width: 2px;
-    border-color: keyboard.has-focus ? Palette.leaf : area.has-hover ? Palette.bronze : #405464;
+    border-color: keyboard.has-focus ? Palette.leaf : area.has-hover ? Palette.bronze : #574737;
     Rectangle {
         x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
-        background: transparent; border-width: 1px; border-color: #263e4f;
+        background: transparent; border-width: 1px; border-color: #49392c;
     }
     VerticalLayout {
         width: parent.width; height: parent.height;
@@ -56,21 +56,19 @@ export component AuthPanel inherits Rectangle {
     callback back-requested();
     callback open-requested();
     callback logout-requested();
-    background: transparent;
-
-    Image { width: parent.width; height: parent.height; source: AssetCatalog.account-frame; image-fit: fill; }
+    background: Palette.panel; border-width: 1px; border-color: Palette.outline; border-radius: 12px;
     PixelButton {
         x: 32px; y: 28px; width: 176px; height: 42px; label: "К лаунчеру";
         clicked => { root.back-requested(); }
     }
-    Rectangle { x: 306px; y: 100px; width: 1px; height: parent.height - 152px; background: #314250; }
+    Rectangle { x: 306px; y: 100px; width: 1px; height: parent.height - 152px; background: #49392c; }
     Image {
         x: 48px; y: 128px; width: 226px; height: 180px;
-        source: AssetCatalog.project-emblem; image-fit: contain;
+        source: AssetCatalog.brand-mark; image-fit: contain;
     }
     Text {
         x: 38px; y: 328px; width: 244px; height: 42px;
-        text: "EquestrianDream"; font-family: "Trebuchet MS"; font-size: 25px;
+        text: "NEVERMORELAND"; font-family: "Trebuchet MS"; font-size: 20px;
         color: Palette.frost; horizontal-alignment: center;
     }
     Text {
@@ -114,8 +112,8 @@ export component AuthPanel inherits Rectangle {
                 Text { text: "Вход через Telegram"; font-family: "Trebuchet MS"; font-size: 28px; color: Palette.frost; vertical-alignment: center; }
             }
             Rectangle {
-                height: 98px; background: #06121f; border-width: 1px;
-                border-color: root.error ? #a65c45 : code-keyboard.has-focus || code-area.has-hover ? Palette.bronze : #405464;
+                height: 98px; background: #100c09; border-width: 1px;
+                border-color: root.error ? #a65c45 : code-keyboard.has-focus || code-area.has-hover ? Palette.bronze : #574737;
                 forward-focus: code-keyboard;
                 accessible-role: button;
                 accessible-label: "Скопировать код подтверждения";

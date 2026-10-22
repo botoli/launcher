@@ -1,149 +1,74 @@
 import { AssetCatalog } from "../theme/assets.slint";
 import { Palette } from "../theme/palette.slint";
 
+component ChromeButton inherits FocusScope {
+    in property <string> label;
+    in property <string> glyph;
+    in property <image> icon;
+    in property <bool> show-icon;
+    in property <bool> available: true;
+    in property <bool> destructive;
+    callback clicked();
+    enabled: root.available;
+    accessible-role: button; accessible-label: root.label;
+    key-pressed(event) => {
+        if (event.text == Key.Return || event.text == " ") { root.clicked(); return accept; } reject
+    }
+    Rectangle {
+        background: area.pressed ? #563c29 : area.has-hover ? (root.destructive ? #70372c : #ffffff12) : transparent;
+        border-width: root.has-focus ? 1px : 0px; border-color: Palette.leaf;
+        if root.show-icon: Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 26px; height: 26px; source: root.icon; image-fit: contain; }
+        if !root.show-icon: Text { text: root.glyph; color: Palette.frost; font-size: 26px; horizontal-alignment: center; vertical-alignment: center; }
+    }
+    area := TouchArea { enabled: root.available; mouse-cursor: pointer; clicked => { root.focus(); root.clicked(); } }
+}
+
 export component TitleBar inherits Rectangle {
     in-out property <string> nickname;
     in property <string> nickname-error;
     in property <bool> nickname-enabled: true;
-    in property <bool> nickname-editable: true;
+    in property <bool> nickname-editable: false;
     in property <bool> auth-verified;
     in property <bool> account-active;
-
     in property <bool> settings-enabled: true;
-    callback settings-clicked();
-    callback account-clicked();
-    callback minimize-clicked();
-    callback close-clicked();
-    callback move-requested(float, float);
-
-    background: #061421ee;
-    border-width: 1px;
-    border-color: #29495a;
-
-    drag-area := TouchArea {
-        x: 374px;
-        width: parent.width - self.x - 162px;
-        height: parent.height;
-        mouse-cursor: self.pressed ? grabbing : grab;
-
-        moved => {
-            root.move-requested(
-                (self.mouse-x - self.pressed-x) / 1px,
-                (self.mouse-y - self.pressed-y) / 1px,
-            );
-        }
+    callback settings-clicked(); callback account-clicked();
+    callback minimize-clicked(); callback close-clicked(); callback move-requested(float, float);
+    private property <float> u: root.height / 74px;
+    background: #100c09c9;
+    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: #bfa38430; }
+    TouchArea {
+        width: parent.width - 410px * root.u; height: parent.height;
+        moved => { if (self.pressed) { root.move-requested((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px); } }
     }
-
-    account := Rectangle {
-        x: 10px; y: 5px; width: 304px; height: 50px;
-        background: root.account-active ? #183044 : account-area.has-hover ? #122a3d : transparent;
-        border-width: 1px;
-        border-color: account-keyboard.has-focus ? Palette.leaf : root.account-active ? Palette.bronze : transparent;
-        accessible-role: button;
+    Image { x: 59px * root.u; y: 19px * root.u; width: 32px * root.u; height: 40px * root.u; source: AssetCatalog.brand-mark; image-fit: contain; }
+    Text {
+        x: 110px * root.u; height: parent.height;
+        text: "NEVERMORELAND"; font-size: 22px * root.u; font-weight: 700;
+        letter-spacing: 2px * root.u; color: Palette.frost; vertical-alignment: center;
+    }
+    account := FocusScope {
+        x: parent.width - 400px * root.u; width: 160px * root.u; height: parent.height;
+        enabled: root.nickname-enabled; accessible-role: button;
         accessible-label: root.auth-verified ? "Открыть аккаунт " + root.nickname : "Войти в аккаунт";
-        Image {
-            x: 6px; y: 3px; width: 44px; height: 44px;
-            source: AssetCatalog.avatar; image-fit: contain;
+        key-pressed(event) => { if (event.text == Key.Return || event.text == " ") { root.account-clicked(); return accept; } reject }
+        Rectangle {
+            background: area.pressed ? #5a3c2633 : area.has-hover || root.account-active ? #ffffff10 : transparent;
+            border-width: account.has-focus ? 1px : 0px; border-color: Palette.leaf;
+        }
+        Rectangle {
+            x: 12px * root.u; y: 16px * root.u; width: 44px * root.u; height: 44px * root.u;
+            background: #27180e; border-color: #b87d45; border-width: 1px; border-radius: 6px;
+            Image { x: 3px; y: 3px; width: parent.width - 6px; height: parent.height - 6px; source: AssetCatalog.avatar; image-fit: contain; }
         }
         Text {
-            x: 62px; y: 5px; width: 220px; height: 23px;
-            text: root.auth-verified ? root.nickname : "Войти в аккаунт";
-            color: Palette.frost; font-size: 16px; font-weight: 600; overflow: elide;
+            x: 70px * root.u; width: parent.width - self.x - 5px; height: parent.height;
+            text: root.auth-verified ? root.nickname : "Войти"; color: Palette.frost;
+            font-size: 18px * root.u; vertical-alignment: center; overflow: elide;
         }
-        Text {
-            x: 62px; y: 29px; width: 220px; height: 16px;
-            text: root.auth-verified ? "Управление профилем" : "Telegram или Discord";
-            color: Palette.muted; font-size: 11px;
-        }
-        account-keyboard := FocusScope {
-            enabled: root.nickname-enabled; focus-on-click: false;
-            key-pressed(event) => {
-                if (event.text == Key.Return || event.text == " ") { root.account-clicked(); return accept; }
-                reject
-            }
-        }
-        account-area := TouchArea {
-            enabled: root.nickname-enabled; mouse-cursor: root.nickname-enabled ? pointer : default;
-            clicked => { account-keyboard.focus(); root.account-clicked(); }
-        }
+        area := TouchArea { enabled: root.nickname-enabled; mouse-cursor: pointer; clicked => { account.focus(); root.account-clicked(); } }
     }
-
-    settings := Rectangle {
-        x: parent.width - 158px; y: 10px; width: 40px; height: 40px;
-        background: settings-area.pressed ? #244156 : settings-area.has-hover ? #173248 : transparent;
-        border-width: 1px;
-        border-color: settings-keyboard.has-focus ? Palette.leaf : transparent;
-        opacity: root.settings-enabled ? 1 : 0.4;
-        accessible-role: button;
-        accessible-label: "Настройки";
-        forward-focus: settings-keyboard;
-        Image {
-            x: 8px; y: 8px; width: 24px; height: 24px;
-            source: AssetCatalog.settings-icon; image-fit: contain;
-        }
-        settings-keyboard := FocusScope {
-            enabled: root.settings-enabled; focus-on-click: false;
-            key-pressed(event) => {
-                if (event.text == Key.Return || event.text == " ") { root.settings-clicked(); return accept; }
-                reject
-            }
-        }
-        settings-area := TouchArea {
-            enabled: root.settings-enabled;
-            mouse-cursor: root.settings-enabled ? pointer : default;
-            clicked => { settings-keyboard.focus(); root.settings-clicked(); }
-        }
-    }
-
-    minimize-area := TouchArea {
-        x: parent.width - 108px;
-        width: 54px;
-        height: parent.height;
-        mouse-cursor: pointer;
-
-        clicked => {
-            root.minimize-clicked();
-        }
-    }
-
-    Rectangle {
-        x: minimize-area.x;
-        width: minimize-area.width;
-        height: parent.height;
-        background: minimize-area.pressed ? #244156 : minimize-area.has-hover ? #173248 : transparent;
-
-        Text {
-            text: "─";
-            color: Palette.frost;
-            font-size: 22px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-    }
-
-    close-area := TouchArea {
-        x: parent.width - 54px;
-        width: 54px;
-        height: parent.height;
-        mouse-cursor: pointer;
-
-        clicked => {
-            root.close-clicked();
-        }
-    }
-
-    Rectangle {
-        x: close-area.x;
-        width: close-area.width;
-        height: parent.height;
-        background: close-area.pressed ? #713528 : close-area.has-hover ? #51291f : transparent;
-
-        Text {
-            text: "×";
-            color: #efb39b;
-            font-size: 28px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-    }
+    for i in 3: Rectangle { x: parent.width - (248px - i * 92px) * root.u; y: 16px * root.u; width: 1px; height: parent.height - 32px * root.u; background: #bfa38418; }
+    ChromeButton { x: parent.width - 248px * root.u; width: 92px * root.u; height: parent.height; label: "Настройки"; show-icon: true; icon: AssetCatalog.settings-warm; available: root.settings-enabled; clicked => { root.settings-clicked(); } }
+    ChromeButton { x: parent.width - 156px * root.u; width: 80px * root.u; height: parent.height; label: "Свернуть"; glyph: "−"; clicked => { root.minimize-clicked(); } }
+    ChromeButton { x: parent.width - 76px * root.u; width: 76px * root.u; height: parent.height; label: "Закрыть"; glyph: "×"; destructive: true; clicked => { root.close-clicked(); } }
 }

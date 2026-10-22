@@ -72,6 +72,7 @@ impl UpdateController {
             || w.get_auth_busy()
             || w.get_auth_visible()
             || w.get_update_visible()
+            || w.get_java_visible()
         {
             return;
         }

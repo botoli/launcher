@@ -1,8 +1,6 @@
 import { AssetCatalog } from "../theme/assets.slint";
 import { Palette } from "../theme/palette.slint";
-import { InfoCard } from "info-card.slint";
 import { PixelButton } from "pixel-button.slint";
-
 export component MainPanel inherits Rectangle {
     in property <string> project-title;
     in property <string> version;
@@ -14,93 +12,31 @@ export component MainPanel inherits Rectangle {
     in property <bool> loading;
     in property <bool> play-enabled: true;
     in property <string> play-label: "Играть";
-
+    in property <float> u: 1;
     callback play-clicked();
-
     background: transparent;
-
-    Image {
-        source: AssetCatalog.main-panel;
-        width: parent.width;
-        height: parent.height;
-        image-fit: fill;
+    Rectangle {
+        x: 34px * root.u; y: 32px * root.u; width: 70px * root.u; height: 70px * root.u;
+        border-color: #75604d55; border-width: 1px; border-radius: 13px * root.u; background: #21181088;
+        Image { x: 10px * root.u; y: 10px * root.u; width: parent.width - 20px * root.u; height: parent.height - 20px * root.u; source: AssetCatalog.version-icon; image-fit: contain; }
     }
-
+    Text { x: 132px * root.u; y: 38px * root.u; width: 150px * root.u; height: 24px * root.u; text: "Версия игры"; font-size: 16px * root.u; color: Palette.muted; }
+    Text { x: 132px * root.u; y: 61px * root.u; width: 150px * root.u; height: 35px * root.u; text: root.version; color: Palette.frost; font-size: 25px * root.u; font-family: "Consolas"; font-weight: 600; }
+    Rectangle { x: 294px * root.u; y: 32px * root.u; height: 70px * root.u; width: 1px; background: #bfa38433; }
     Image {
-        x: (parent.width - self.width) / 2;
-        y: -18px;
-        width: parent.width * 0.28;
-        height: self.width * 422 / 531;
-        source: AssetCatalog.project-emblem;
+        x: 336px * root.u; y: 45px * root.u; width: 42px * root.u; height: 44px * root.u;
+        source: root.server-signal == 3 ? AssetCatalog.server-icon : root.server-signal == 2 ? AssetCatalog.server-fair-icon : root.server-signal == 1 ? AssetCatalog.server-poor-icon : AssetCatalog.server-unavailable-icon;
         image-fit: contain;
     }
-
-    Text {
-        x: parent.width * 0.15;
-        y: parent.height * 0.26;
-        width: 70%;
-        height: 15%;
-        text: root.project-title;
-        color: Palette.frost;
-        font-family: "Trebuchet MS";
-        font-size: 40px;
-        font-weight: 400;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-
-    HorizontalLayout {
-        x: parent.width * 0.10;
-        y: parent.height * 0.5;
-        width: 80%;
-        height: 18%;
-        spacing: parent.width * 0.06;
-
-        InfoCard {
-            horizontal-stretch: 1;
-            icon: AssetCatalog.version-icon;
-            label: "Версия";
-            value: root.version;
-            detail: "";
-            asset-backed: true;
-        }
-
-        InfoCard {
-            horizontal-stretch: 1;
-            icon: root.server-signal == 3 ? AssetCatalog.server-icon
-                : root.server-signal == 2 ? AssetCatalog.server-fair-icon
-                : root.server-signal == 1 ? AssetCatalog.server-poor-icon
-                : AssetCatalog.server-unavailable-icon;
-            label: root.server-status;
-            value: root.server-address;
-            detail: root.server-online && root.ping-ms >= 0 ? root.ping-ms + " ms" : "—";
-            healthy: root.server-online;
-            detail-color: root.server-signal == 3 ? Palette.leaf
-                : root.server-signal == 2 ? #e8bf50
-                : root.server-signal == 1 ? #ef9278 : Palette.muted;
-            asset-backed: true;
-        }
-    }
-
+    Rectangle { x: 394px * root.u; y: 46px * root.u; width: 9px * root.u; height: 9px * root.u; border-radius: 5px; background: root.server-online ? #70d928 : #a69a89; }
+    Text { x: 414px * root.u; y: 38px * root.u; width: 172px * root.u; height: 24px * root.u; text: root.server-status; overflow: elide; font-size: 16px * root.u; color: Palette.muted; }
+    Text { x: 414px * root.u; y: 61px * root.u; width: 172px * root.u; height: 35px * root.u; text: root.server-online && root.ping-ms >= 0 ? root.ping-ms + " мс" : "—"; font-size: 25px * root.u; color: Palette.frost; font-weight: 600; }
     PixelButton {
-        // Cover the baked-in button frame and its decorations in the 1644x957 panel.
-        x: parent.width * 360 / 1644;
-        y: parent.height * 684 / 957;
-        border-radius: 0px;
-        width: parent.width * 948 / 1644;
-        height: parent.height * 256 / 957;
-        primary: true;
-        asset-backed: true;
-        surface-image: AssetCatalog.play-surface;
-        show-surface: true;
-        surface-opacity: 1;
-        button-enabled: root.play-enabled;
-        label: root.play-label;
-
-        clicked => {
-            if (!root.loading && root.play-enabled) {
-                root.play-clicked();
-            }
-        }
+        x: parent.width - self.width - 26px * root.u; y: 27px * root.u;
+        width: 266px * root.u; height: 80px * root.u;
+        primary: true; label-font-size: 29px * root.u;
+        button-enabled: root.play-enabled && !root.loading;
+        label: root.play-label; show-icon: !root.loading; icon: AssetCatalog.play-icon;
+        clicked => { root.play-clicked(); }
     }
 }

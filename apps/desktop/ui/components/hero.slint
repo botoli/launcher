@@ -1,0 +1,11 @@
+import { Palette } from "../theme/palette.slint";
+export component Hero inherits Rectangle {
+    in property <float> u: 1;
+    background: transparent;
+    Rectangle { x: 2px * root.u; y: 4px * root.u; width: 8px * root.u; height: 8px * root.u; border-radius: 4px; background: Palette.leaf; }
+    Text { x: 22px * root.u; y: 0px; width: parent.width - self.x; height: 20px * root.u; text: "MINECRAFT · NEVERMORELAND"; font-size: 12px * root.u; letter-spacing: 2.5px * root.u; color: Palette.muted; }
+    Text { x: 0px; y: 5px * root.u; width: parent.width; height: 114px * root.u; text: "Твоя история"; font-size: 94px * root.u; font-weight: 800; letter-spacing: -4px * root.u; color: Palette.frost; }
+    Text { x: 0px; y: 98px * root.u; width: parent.width; height: 114px * root.u; text: "продолжается"; font-size: 94px * root.u; font-weight: 800; letter-spacing: -4px * root.u; color: Palette.frost; }
+    Text { x: 0px; y: 194px * root.u; width: parent.width; height: 114px * root.u; text: "здесь."; font-size: 94px * root.u; font-weight: 800; letter-spacing: -4px * root.u; color: Palette.moss; }
+    Text { x: 0px; y: 344px * root.u; width: parent.width; height: 30px * root.u; text: "Твои лошади. Твой мир. Новые приключения."; font-size: 21px * root.u; color: Palette.frost; }
+}

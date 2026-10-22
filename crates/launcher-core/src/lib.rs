@@ -6,6 +6,7 @@ pub mod http;
 pub mod identity;
 pub mod installer;
 pub mod java;
+pub mod java_install;
 mod launch_options;
 pub mod launcher_update;
 pub mod manifest;
@@ -891,6 +892,11 @@ async fn run_backend_play_workflow(
     };
 
     let identity = MinecraftLaunchIdentity::from(&profile);
+    if let Some(control) =
+        game_actor::run_java_setup(commands, states, game, config.java_version).await
+    {
+        return control;
+    }
     match loader {
         BackendLoader::Vanilla => {
             game_actor::run_game_workflow(commands, states, identity, game).await
@@ -1633,6 +1639,7 @@ mod tests {
             launcher_name: "test".to_owned(),
             launcher_version: "1".to_owned(),
         };
+        let (java_setup, mut java_requests) = crate::java_install::JavaSetup::channel();
         let game = LauncherGameConfig::with_neoforge_launcher(
             build_http_client()?,
             vanilla,
@@ -1641,6 +1648,29 @@ mod tests {
                 heaps: Arc::clone(&heaps),
             }),
         );
+        let game = game.with_java_setup(java_setup);
+        let java_root = installation.path().to_owned();
+        let java_calls = Arc::clone(&calls);
+        let setup_task = tokio::spawn(async move {
+            for index in 0..2 {
+                let request = java_requests.recv().await.unwrap();
+                assert_eq!(request.required_major, 21);
+                assert!(java_root.join("state.json").exists());
+                assert_eq!(
+                    fs::read(java_root.join("mods/existing.jar")).unwrap(),
+                    b"already synchronized"
+                );
+                assert_eq!(
+                    java_calls.load(Ordering::Acquire),
+                    index,
+                    "Minecraft must wait for Java readiness"
+                );
+                request
+                    .reply
+                    .send(Ok(crate::java_install::JavaSetupOutcome::Ready))
+                    .unwrap();
+            }
+        });
         let core = LauncherCore::new_backend_with_game(
             &Handle::current(),
             installation.path(),
@@ -1691,6 +1721,7 @@ mod tests {
             *heaps.lock().unwrap(),
             [HeapMemory::new(2048, 6144)?, HeapMemory::new(1536, 1536)?]
         );
+        setup_task.await?;
         assert_eq!(calls.load(Ordering::Acquire), 2);
         assert_eq!(server.request_count("/api/client-config"), 2);
         assert_eq!(server.request_count("/mods.zip"), 0);

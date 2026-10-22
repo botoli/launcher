@@ -92,6 +92,7 @@ pub enum VanillaLaunchError {
     RuntimePreparationTask {
         source: tokio::task::JoinError,
     },
+    ServerList(std::io::Error),
     Process(ProcessError),
 }
 
@@ -136,6 +137,10 @@ impl fmt::Display for VanillaLaunchError {
             Self::RuntimePreparationTask { source } => {
                 write!(formatter, "runtime preparation task failed: {source}")
             }
+            Self::ServerList(source) => write!(
+                formatter,
+                "failed to prepare Minecraft server list: {source}"
+            ),
             Self::Process(source) => write!(formatter, "Minecraft process launch failed: {source}"),
         }
     }
@@ -154,6 +159,7 @@ impl Error for VanillaLaunchError {
             Self::Acquisition(source) => Some(source),
             Self::RuntimePreparation(source) => Some(source),
             Self::RuntimePreparationTask { source } => Some(source),
+            Self::ServerList(source) => Some(source),
             Self::Process(source) => Some(source),
             Self::Cancelled | Self::MissingJavaVersion { .. } => None,
         }
@@ -178,7 +184,8 @@ pub fn identity_to_launch_context(
         access_token: identity.access_token().to_owned(),
         user_type: identity.user_type().to_owned(),
         game_directory: config.game_directory.clone(),
-        quick_play_multiplayer: config.server_address.clone(),
+        // The project server is saved in servers.dat; entering it is a user action.
+        quick_play_multiplayer: None,
         assets_root: layout.assets_dir(),
         natives_directory: layout.natives_dir(&config.version_id),
         launcher_name: config.launcher_name.clone(),
@@ -347,6 +354,10 @@ where
         }
     }
     ensure_not_cancelled(cancellation)?;
+    super::server_list::prepare_server_list(config)
+        .await
+        .map_err(VanillaLaunchError::ServerList)?;
+    ensure_not_cancelled(cancellation)?;
     process_launcher(launch_spec).map_err(VanillaLaunchError::Process)
 }
 
@@ -453,6 +464,15 @@ pub(crate) mod tests {
             MinecraftRuntimeLayout::new(&config.runtime_root).natives_dir(VERSION_ID)
         );
         assert!(!format!("{context:?}").contains("minecraft-access-secret"));
+    }
+
+    #[test]
+    fn configured_server_does_not_enable_quick_play() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = config_for_paths(temp.path().join("runtime"), temp.path().join("game"));
+        config.server_address = Some("server.example:25565".to_owned());
+        let context = session_to_launch_context(&session(), &config);
+        assert_eq!(context.quick_play_multiplayer, None);
     }
 
     #[test]

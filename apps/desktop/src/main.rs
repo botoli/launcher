@@ -2,6 +2,7 @@
 
 mod app_config;
 mod diagnostics;
+mod java_install;
 mod logging;
 mod memory_settings;
 mod platform;
@@ -11,6 +12,8 @@ mod settings;
 mod system_memory;
 mod telegram_login;
 mod telegram_session;
+#[cfg(test)]
+mod ui_review;
 mod update_controller;
 
 use std::{process::ExitCode, rc::Rc};
@@ -173,6 +176,12 @@ fn run() -> Result<(), DesktopError> {
     diagnostics.bind(&window);
     apply_static_display_state(&window, &DesktopDisplayState::default());
     bind_window_callbacks(&window);
+    let java_installer = java_install::JavaInstallController::bind(
+        &window,
+        runtime.handle().clone(),
+        app_config.paths.logs().to_path_buf(),
+    );
+    java_installer.set_source(app_config.java_installer_url.clone());
     window.set_installation_path(app_config.paths.game().display().to_string().into());
     let _update_controller = match launcher_core::launcher_update::UpdateClient::new(
         app_config.backend.server_url().clone(),
@@ -189,7 +198,11 @@ fn run() -> Result<(), DesktopError> {
     };
     runtime.spawn_blocking(self_update::cleanup_completed);
 
-    match runtime.block_on(configure_launcher(runtime.handle(), app_config)) {
+    match runtime.block_on(configure_launcher(
+        runtime.handle(),
+        app_config,
+        java_installer.setup(),
+    )) {
         Ok(configured) => {
             apply_static_display_state(&window, &configured.display);
             // A saved offline nickname is not proof of ownership of a Telegram account.
@@ -279,6 +292,7 @@ fn install_production_panic_hook() {
 async fn configure_launcher(
     runtime: &Handle,
     config: DesktopAppConfig,
+    java_setup: launcher_core::java_install::JavaSetup,
 ) -> Result<ConfiguredLauncher, DesktopConfigError> {
     let (profile_controller, _profile) =
         ProfileController::load(SettingsStore::new(config.paths.settings_file()));
@@ -306,7 +320,7 @@ async fn configure_launcher(
         config.backend.server_url().to_string(),
     );
     vanilla.telegram_auth = Some(telegram_gate.clone());
-    let game = LauncherGameConfig::new(client.clone(), vanilla);
+    let game = LauncherGameConfig::new(client.clone(), vanilla).with_java_setup(java_setup);
     let core = LauncherCore::new_backend_with_game(
         runtime,
         config.paths.game(),
@@ -782,7 +796,11 @@ fn bind_play_command(
         let Some(window) = window_weak.upgrade() else {
             return;
         };
-        if window.get_loading() || window.get_update_visible() || !window.get_play_enabled() {
+        if window.get_loading()
+            || window.get_update_visible()
+            || window.get_java_visible()
+            || !window.get_play_enabled()
+        {
             return;
         }
         if !window.get_auth_verified() || telegram.session().is_none() {

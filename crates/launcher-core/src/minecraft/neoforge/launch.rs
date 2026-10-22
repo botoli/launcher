@@ -220,6 +220,10 @@ where
         }
     }
     ensure_not_cancelled(cancellation)?;
+    super::super::server_list::prepare_server_list(&config.vanilla)
+        .await
+        .map_err(NeoForgeLaunchError::ServerList)?;
+    ensure_not_cancelled(cancellation)?;
     let mut process = launch_process(spec).map_err(NeoForgeLaunchError::Process)?;
     if cancellation.is_cancelled() {
         process.cancel();
@@ -415,6 +419,8 @@ pub enum NeoForgeLaunchError {
     },
     #[error("NeoForge process launch failed: {0}")]
     Process(ProcessError),
+    #[error("failed to prepare Minecraft server list: {0}")]
+    ServerList(#[source] std::io::Error),
 }
 
 #[cfg(test)]

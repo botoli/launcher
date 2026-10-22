@@ -39,6 +39,7 @@ function Invoke-CargoCommand {
 
 Push-Location $repositoryRoot
 try {
+    & (Join-Path $PSScriptRoot 'release.ps1') -Check
     Invoke-CargoCommand @('fmt', '--all', '--', '--check')
     Invoke-CargoCommand @('check', '--workspace', '--all-targets')
     Invoke-CargoCommand @(

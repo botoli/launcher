@@ -8,6 +8,7 @@ mod natives;
 pub mod neoforge;
 mod rules;
 mod runtime;
+mod server_list;
 mod version_catalog;
 
 pub use acquisition::{

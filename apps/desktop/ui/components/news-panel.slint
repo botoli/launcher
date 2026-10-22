@@ -1,0 +1,145 @@
+import { Palette } from "../theme/palette.slint";
+import { ScrollView } from "std-widgets.slint";
+
+struct ReleaseNote {
+    version: string,
+    title: string,
+    changes: [string],
+}
+
+component ReleaseEntry inherits Rectangle {
+    in property <ReleaseNote> release;
+    in property <bool> latest;
+    background: transparent;
+    preferred-height: max(100px, entry.preferred-height + 48px);
+    vertical-stretch: 0;
+
+    Text {
+        x: 0px; y: 24px; width: 130px; height: 38px;
+        text: root.release.version;
+        color: root.latest ? Palette.leaf : Palette.muted;
+        font-size: 30px;
+        font-weight: 600;
+    }
+    if root.latest: Text {
+        x: 0px; y: 70px; width: 130px; height: 20px;
+        text: "Последняя версия";
+        color: Palette.leaf;
+        font-size: 13px;
+    }
+    entry := VerticalLayout {
+        x: 158px; y: 24px;
+        width: root.width - 158px;
+        height: self.preferred-height;
+        spacing: 14px;
+        Text {
+            text: root.release.title;
+            color: Palette.frost;
+            font-size: 22px;
+            font-weight: 600;
+            wrap: word-wrap;
+        }
+        for change in root.release.changes: Text {
+            text: "• " + change;
+            color: Palette.muted;
+            font-size: 16px;
+            wrap: word-wrap;
+        }
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Palette.outline;
+    }
+}
+
+export component NewsPanel inherits Rectangle {
+    // Keep historical versions explicit: raising the application version must
+    // never relabel an older release. Add new entries at the top for each release.
+    private property <[ReleaseNote]> releases: [
+        {
+            version: "0.1.9",
+            title: "Удобные настройки памяти",
+            changes: [
+                "Обновлена страница настроек: крупное поле памяти, широкий ползунок и отдельные кнопки отмены и сохранения изменений.",
+                "Убраны показатели «Свободно сейчас», «Можно выделить», «Всего» и рекомендации по объёму памяти.",
+                "Поле памяти получает фокус при клике по всей рамке. Ошибки и исправление значения помещаются даже в минимальном окне.",
+                "Повторное определение памяти доступно при ошибке. Проверка допустимого объёма и управление с клавиатуры сохранены."
+            ]
+        },
+        {
+            version: "0.1.8",
+            title: "Лёгкий лаунчер и установка Java по запросу",
+            changes: [
+                "Установщик Java убран из лаунчера: размер приложения уменьшен примерно на 171 МБ.",
+                "После проверки конфигурации и модов лаунчер ищет подходящую Java 21 и при необходимости предлагает скачать её с хоста проекта.",
+                "Добавлены прогресс и отмена загрузки Java. Перед установкой файл проверяется на целостность.",
+                "После установки временный файл удаляется, а запуск Minecraft продолжается автоматически. При ошибке доступны повтор и отмена."
+            ]
+        },
+        {
+            version: "0.1.6",
+            title: "Новый облик лаунчера",
+            changes: [
+                "Добавлен интерфейс NEVERMORELAND: лесной фон, новая панель запуска и навигация.",
+                "На вкладке «Новости» появилась история обновлений с версиями и списком изменений.",
+                "Лаунчер проверяет Java 21 перед игрой и предлагает установить её, если подходящая версия не найдена.",
+                "Сервер проекта автоматически добавляется в список Minecraft. Чтобы подключиться, выберите «Сетевая игра»."
+            ]
+        },
+        {
+            version: "0.1.2",
+            title: "Обновления лаунчера и надёжный вход",
+            changes: [
+                "Добавлено обновление лаунчера: загрузка новой версии с проверкой файла и восстановлением при ошибке установки.",
+                "Исправлена проверка Telegram-сессии и продолжение запуска после входа.",
+                "При сбое соединения сохранённый вход остаётся доступен для повторной попытки."
+            ]
+        },
+        {
+            version: "0.1.0",
+            title: "Первые возможности",
+            changes: [
+                "Подготовка Minecraft Vanilla и NeoForge, загрузка и синхронизация модов сервера.",
+                "Вход через Telegram и выбор игрового ника при регистрации в боте.",
+                "Настройка оперативной памяти, отображение доступности сервера и пинга.",
+                "Панель диагностики с причиной ошибки и логами запуска."
+            ]
+        }
+    ];
+
+    background: Palette.panel;
+    border-width: 1px;
+    border-color: Palette.outline;
+    border-radius: 12px;
+    VerticalLayout {
+        padding: 28px;
+        spacing: 12px;
+        Text {
+            text: "Новости";
+            color: Palette.frost;
+            font-size: 32px;
+            font-weight: 600;
+        }
+        Text {
+            text: "Что нового в обновлениях лаунчера";
+            color: Palette.muted;
+            font-size: 16px;
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            viewport-width: self.visible-width;
+            horizontal-scrollbar-policy: always-off;
+            viewport-height: history.preferred-height;
+            history := VerticalLayout {
+                width: parent.width - 16px;
+                spacing: 0px;
+                for release[index] in root.releases: ReleaseEntry {
+                    width: history.width;
+                    release: release;
+                    latest: index == 0;
+                }
+            }
+        }
+    }
+}

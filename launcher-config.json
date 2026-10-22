@@ -1,3 +1,4 @@
 {
-  "server_url": "https://launcher.nevermoreland.ru/"
+  "server_url": "https://launcher.nevermoreland.ru/",
+  "java21_msi_url": "https://launcher.nevermoreland.ru/download/OpenJDK21U-jdk_x64_windows_hotspot_21.0.3_9.msi"
 }

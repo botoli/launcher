@@ -101,6 +101,7 @@ pub struct LauncherGameConfig {
     pub vanilla: VanillaLaunchConfig,
     launcher: Arc<dyn VanillaLauncher>,
     neoforge_launcher: Arc<dyn NeoForgeLauncher>,
+    java_setup: Option<crate::java_install::JavaSetup>,
 }
 
 impl LauncherGameConfig {
@@ -110,7 +111,13 @@ impl LauncherGameConfig {
             vanilla,
             launcher: Arc::new(ProductionVanillaLauncher),
             neoforge_launcher: Arc::new(ProductionNeoForgeLauncher),
+            java_setup: None,
         }
+    }
+
+    pub fn with_java_setup(mut self, setup: crate::java_install::JavaSetup) -> Self {
+        self.java_setup = Some(setup);
+        self
     }
 
     pub(crate) fn neoforge_for_client_config(&self, config: &ClientConfig) -> NeoForgeLaunchConfig {
@@ -166,6 +173,7 @@ impl LauncherGameConfig {
             vanilla,
             launcher,
             neoforge_launcher: Arc::new(ProductionNeoForgeLauncher),
+            java_setup: None,
         }
     }
 
@@ -180,6 +188,7 @@ impl LauncherGameConfig {
             vanilla,
             launcher: Arc::new(ProductionVanillaLauncher),
             neoforge_launcher,
+            java_setup: None,
         }
     }
 }
@@ -193,6 +202,42 @@ impl fmt::Debug for LauncherGameConfig {
             .field("launcher", &"<internal>")
             .field("neoforge_launcher", &"<internal>")
             .finish()
+    }
+}
+
+pub(super) async fn run_java_setup(
+    commands: &mut mpsc::Receiver<LauncherCommand>,
+    states: &watch::Sender<LauncherState>,
+    game: &LauncherGameConfig,
+    required_major: u32,
+) -> Option<WorkflowControl> {
+    use crate::java_install::JavaSetupOutcome;
+    let setup = game.java_setup.as_ref()?;
+    publish_state(
+        states,
+        LauncherState::new(LauncherStatus::Launching, None).at_stage(LauncherStage::CheckingJava),
+    );
+    let request = setup.ensure(required_major);
+    tokio::pin!(request);
+    loop {
+        tokio::select! {
+            result = &mut request => return match result {
+                Ok(JavaSetupOutcome::Ready) => None,
+                Ok(JavaSetupOutcome::Cancelled) => Some(WorkflowControl::Cancel),
+                Err(message) => {
+                    publish_state(states, LauncherState::with_diagnostic(
+                        LauncherFailure::Java { required_major },
+                        LauncherDiagnostic { message, log_tail: String::new() },
+                    ).at_stage(LauncherStage::CheckingJava));
+                    Some(WorkflowControl::Continue)
+                }
+            },
+            command = commands.recv() => match command {
+                Some(LauncherCommand::Cancel) => return Some(WorkflowControl::Cancel),
+                Some(LauncherCommand::Play) => {},
+                None => return Some(WorkflowControl::Stop),
+            }
+        }
     }
 }
 

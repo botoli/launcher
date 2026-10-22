@@ -81,16 +81,6 @@ impl MemoryBudget {
     pub fn suggested(self, value: u32) -> u32 {
         value.clamp(MIN_MEMORY_MIB, self.maximum_mib)
     }
-
-    pub fn recommendation(self) -> String {
-        let upper = self.maximum_mib.min(8192);
-        let lower = upper.min(4096);
-        if lower == upper {
-            format!("Рекомендуется {lower} МБ для этого компьютера")
-        } else {
-            format!("Рекомендуется {lower}–{upper} МБ")
-        }
-    }
 }
 
 #[cfg(test)]
@@ -107,7 +97,6 @@ mod tests {
                 })
                 .unwrap();
                 assert_eq!(budget.maximum_mib, maximum);
-                assert!(!budget.recommendation().contains("8192") || maximum >= 8192);
             }
         }
         assert!(

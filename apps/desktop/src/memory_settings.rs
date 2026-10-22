@@ -44,37 +44,27 @@ impl MemorySettingsController {
         self.budget.set(None);
         window.set_memory_detected(false);
         window.set_memory_maximum(MIN_MEMORY_MIB as i32);
-        window.set_memory_recommendation("".into());
         match (self.query_memory)() {
-            Ok(memory) => {
-                match MemoryBudget::for_system(memory) {
-                    Ok(budget) => {
-                        self.budget.set(Some(budget));
-                        window.set_memory_maximum(budget.maximum_mib as i32);
-                        window.set_memory_detected(true);
-                        window.set_memory_recommendation(budget.recommendation().into());
-                        window.set_memory_summary(format!(
-                            "Всего: {} МБ   •   Свободно сейчас: {} МБ   •   Можно выделить: {} МБ",
-                            memory.total_mib, memory.available_mib, budget.maximum_mib,
-                        ).into());
-                    }
-                    Err(message) => {
-                        window.set_memory_summary(
-                            format!(
-                                "Всего: {} МБ   •   Свободно сейчас: {} МБ",
-                                memory.total_mib, memory.available_mib
-                            )
-                            .into(),
-                        );
-                        window.set_memory_problem(message.into());
-                    }
+            Ok(memory) => match MemoryBudget::for_system(memory) {
+                Ok(budget) => {
+                    tracing::debug!(
+                        total_mib = memory.total_mib,
+                        available_mib = memory.available_mib,
+                        maximum_mib = budget.maximum_mib,
+                        "detected memory budget"
+                    );
+                    self.budget.set(Some(budget));
+                    window.set_memory_maximum(budget.maximum_mib as i32);
+                    window.set_memory_detected(true);
                 }
-            }
+                Err(message) => {
+                    window.set_memory_problem(message.into());
+                }
+            },
             Err(error) => {
                 tracing::warn!(%error, "failed to detect physical memory");
-                window.set_memory_summary("Сведения о памяти недоступны".into());
                 window.set_memory_problem(
-                    "Не удалось определить ОЗУ. Откройте настройки и нажмите «Обновить сведения»."
+                    "Не удалось определить ОЗУ. Откройте настройки и нажмите «Определить память снова»."
                         .into(),
                 );
             }
@@ -391,14 +381,30 @@ mod tests {
     }
 
     fn render(window: &AppWindow, adapter: &MinimalSoftwareWindow, name: &str) {
-        for (scale, suffix) in [(1.0, "100"), (1.25, "125"), (1.5, "150")] {
+        let mut sizes = vec![
+            (1180., 750., 1.0, "100"),
+            (1180., 750., 1.25, "125"),
+            (1180., 750., 1.5, "150"),
+        ];
+        if name == "main-initial"
+            || name == "mods-downloading"
+            || name.starts_with("news")
+            || name.starts_with("settings")
+        {
+            sizes.extend([
+                (1536., 1024., 1.0, "reference"),
+                (1000., 720., 1.5, "minimum-150"),
+                (1800., 800., 1.0, "wide"),
+            ]);
+        }
+        for (logical_width, logical_height, scale, suffix) in sizes {
             window
                 .window()
                 .dispatch_event(WindowEvent::ScaleFactorChanged {
                     scale_factor: scale,
                 });
-            let width = (1180.0 * scale) as u32;
-            let height = (750.0 * scale) as u32;
+            let width = (logical_width * scale) as u32;
+            let height = (logical_height * scale) as u32;
             adapter.set_size(PhysicalSize::new(width, height));
             window.window().request_redraw();
             let mut pixels = vec![Rgb8Pixel::default(); (width * height) as usize];
@@ -537,7 +543,7 @@ mod tests {
         window.set_auth_verified(false);
         assert!(!window.get_auth_visible());
         render(&window, &adapter, "main-signed-out");
-        click(&window, 38.0, 30.0);
+        click(&window, 900.0, 30.0);
         assert!(window.get_auth_visible());
         assert_eq!(window.get_auth_provider(), 0);
         render(&window, &adapter, "auth-providers");
@@ -580,6 +586,68 @@ mod tests {
         assert!(!window.get_auth_busy());
         assert_eq!(window.get_auth_provider(), 0);
         render(&window, &adapter, "main-initial");
+        // News is a real route: verify mouse/keyboard access, history scrolling,
+        // return navigation, and the launch-time navigation lock.
+        assert!(!window.get_news_visible());
+        click(&window, 190.0, 80.0);
+        assert!(window.get_news_visible());
+        key(&window, slint::platform::Key::Return);
+        assert!(window.get_news_visible());
+        render(&window, &adapter, "news");
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(650.0, 500.0),
+                delta_x: 0.0,
+                delta_y: -650.0,
+            });
+        render(&window, &adapter, "news-history");
+        click(&window, 80.0, 80.0);
+        assert!(!window.get_news_visible());
+        key(&window, slint::platform::Key::Tab);
+        key(&window, slint::platform::Key::Return);
+        assert!(window.get_news_visible());
+        click(&window, 80.0, 80.0);
+        window.set_loading(true);
+        click(&window, 190.0, 80.0);
+        assert!(!window.get_news_visible());
+        window.set_loading(false);
+
+        // The Java offer blocks navigation, and its buttons stay disabled while
+        // the external Windows Installer owns the installation operation.
+        let java = crate::java_install::JavaInstallController::bind(
+            &window,
+            runtime.handle().clone(),
+            root.path().join("logs"),
+        );
+        window.set_java_visible(true);
+        window.set_java_message("Конфигурация и моды проверены. Для запуска нужна Java 21 x64. Скачать и установить Eclipse Temurin OpenJDK 21.0.3+9? После загрузки откроется мастер Windows; может потребоваться разрешение администратора. Оставьте стандартную папку установки. Затем запуск Minecraft продолжится автоматически.".into());
+        render(&window, &adapter, "java-offer");
+        click(&window, 900.0, 30.0);
+        assert!(!window.get_auth_visible());
+        click(&window, 1042.0, 30.0);
+        assert!(!window.get_settings_visible());
+        window.set_java_busy(true);
+        window.set_java_progress(0.45);
+        window.set_java_message(
+            "Скачивание Java: 77,1 из 171,4 МБ. Файл будет проверен перед установкой.".into(),
+        );
+        render(&window, &adapter, "java-downloading");
+        window.set_java_can_cancel(false);
+        window.set_java_message("Ожидаем завершения мастера установки Java 21. Отменить установку можно в мастере Windows.".into());
+        render(&window, &adapter, "java-installing");
+        window.invoke_java_dismiss_requested();
+        assert!(window.get_java_visible());
+        window.set_java_busy(false);
+        window.set_java_error(true);
+        window.set_java_can_cancel(true);
+        window.set_java_message(
+            "Установка Java отменена. Можно повторить или вернуться в лаунчер.".into(),
+        );
+        render(&window, &adapter, "java-cancelled");
+        click(&window, 800.0, 535.0);
+        assert!(!window.get_java_visible());
+        drop(java);
         // Render every connection icon and verify that failed probes clear the old ping.
         for (ping_ms, signal, preview) in [
             (48, 3, "server-good"),
@@ -630,7 +698,7 @@ mod tests {
 
         // Exercise the real TextInput binding, including replacing selected text
         // and arrow keys, rather than only calling the Rust callbacks.
-        let position = slint::LogicalPosition::new(850.0, 245.0);
+        let position = slint::LogicalPosition::new(850.0, 257.0);
         window.window().dispatch_event(WindowEvent::PointerPressed {
             position,
             button: slint::platform::PointerEventButton::Left,
@@ -656,7 +724,7 @@ mod tests {
         key(&window, slint::platform::Key::Escape);
         assert!(!window.get_settings_visible());
         render(&window, &adapter, "main");
-        let position = slint::LogicalPosition::new(150.0, 20.0);
+        let position = slint::LogicalPosition::new(900.0, 20.0);
         window.window().dispatch_event(WindowEvent::PointerPressed {
             position,
             button: slint::platform::PointerEventButton::Left,
@@ -779,7 +847,7 @@ mod tests {
             crate::server_monitor::ServerMonitor::start(&window, runtime.handle(), ""),
         );
         render(&window, &adapter, "main-ready");
-        click(&window, 590.0, 475.0);
+        click(&window, 590.0, 545.0);
         assert!(window.get_loading());
         assert!(!window.get_play_enabled());
         click(&window, 1042.0, 30.0);
@@ -787,7 +855,7 @@ mod tests {
         assert!(window.get_preparing());
         window.invoke_play_requested("OtherPlayer".into());
         assert_eq!(window.get_nickname_input(), "TestPlayer");
-        click(&window, 150.0, 20.0);
+        click(&window, 900.0, 20.0);
         window.window().dispatch_event(WindowEvent::KeyPressed {
             text: slint::platform::Key::Control.into(),
         });

@@ -6,7 +6,7 @@ use slint_build::{CompilerConfiguration, EmbedResourcesKind};
 
 const APPLICATION_NAME: &str = "Equestrian Dream Launcher";
 const EXECUTABLE_NAME: &str = "EquestrianDreamLauncher.exe";
-const ICON_SOURCE: &str = "../../assets/decorations/project-horse.png";
+const ICON_SOURCE: &str = "../../assets/launcher_ico-Photoroom.png";
 const ICON_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
 
 fn main() -> Result<(), Box<dyn Error>> {
