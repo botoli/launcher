@@ -58,6 +58,15 @@ export component NewsPanel inherits Rectangle {
     // never relabel an older release. Add new entries at the top for each release.
     private property <[ReleaseNote]> releases: [
         {
+            version: "0.1.13",
+            title: "Новые иконки интерфейса",
+            changes: [
+                "Настройки и аккаунт получили иконки Lucide Settings и UserRound.",
+                "Качество связи отображается иконками SignalHigh, SignalMedium, SignalLow и SignalZero: зелёной, жёлтой, красной и серой.",
+                "Версию игры по-прежнему обозначает блок травы Minecraft."
+            ],
+        },
+        {
             version: "0.1.12",
             title: "Понятные ошибки и повтор подключения",
             changes: [

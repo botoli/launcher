@@ -1,4 +1,4 @@
-Equestrian Dream Launcher 0.1.12
+Equestrian Dream Launcher 0.1.13
 
 Запуск
 1. Распакуйте папку EquestrianDreamLauncher в любое удобное место.
